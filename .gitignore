@@ -1,0 +1,79 @@
+# --- Go ---
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+/desklog
+
+# Test & coverage
+*.test
+*.out
+coverage.txt
+coverage.html
+*.prof
+
+# Go workspace (local module experiments)
+go.work
+go.work.sum
+
+# Vendor (if you vendor later; usually committed — uncomment if you prefer ignoring)
+# vendor/
+
+# --- Environment & secrets ---
+.env
+.env.*
+!.env.example
+
+# --- IDE / editors ---
+.idea/
+*.iml
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*.swo
+*~
+
+# Cursor (local editor state)
+.cursor/
+
+# --- OS ---
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Icon
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# --- Docker / local runtime ---
+docker-compose.override.yml
+.docker/
+
+# --- Logs & temp ---
+*.log
+logs/
+tmp/
+temp/
+
+# --- MongoDB local dumps (if you export data locally) ---
+dump/
+*.bson
