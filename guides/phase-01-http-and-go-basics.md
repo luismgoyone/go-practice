@@ -28,20 +28,24 @@ A **backend API** is a program that waits for **HTTP requests** over the network
 
 A request has:
 
-| Part | Example | Meaning |
-|------|---------|---------|
-| Method | `GET`, `POST`, `PATCH`, `DELETE` | What action the client wants |
-| Path | `/projects/abc123` | Which resource |
-| Headers | `Content-Type: application/json` | Metadata about the request |
-| Body | `{"name":"go-practice"}` | Payload (optional; common on POST/PATCH) |
+
+| Part    | Example                          | Meaning                                  |
+| ------- | -------------------------------- | ---------------------------------------- |
+| Method  | `GET`, `POST`, `PATCH`, `DELETE` | What action the client wants             |
+| Path    | `/projects/abc123`               | Which resource                           |
+| Headers | `Content-Type: application/json` | Metadata about the request               |
+| Body    | `{"name":"go-practice"}`         | Payload (optional; common on POST/PATCH) |
+
 
 A response has:
 
-| Part | Example | Meaning |
-|------|---------|---------|
-| Status code | `200`, `201`, `404` | Outcome in one number |
-| Headers | `Content-Type: application/json` | Metadata about the response |
-| Body | `{"id":"abc123","name":"go-practice"}` | Payload (optional) |
+
+| Part        | Example                                | Meaning                     |
+| ----------- | -------------------------------------- | --------------------------- |
+| Status code | `200`, `201`, `404`                    | Outcome in one number       |
+| Headers     | `Content-Type: application/json`       | Metadata about the response |
+| Body        | `{"id":"abc123","name":"go-practice"}` | Payload (optional)          |
+
 
 **Your job as a backend developer:** receive the request, do something (read/write data, validate input), return a response. In Go, the function that does this is called a **handler**.
 
@@ -149,11 +153,13 @@ type Project struct {
 }
 ```
 
-| Tag | Effect |
-|-----|--------|
-| `json:"name"` | JSON field name is `name` |
-| `json:"description,omitempty"` | Omit field if empty in output |
-| `json:"created_at"` | Snake_case in JSON is conventional for APIs |
+
+| Tag                            | Effect                                      |
+| ------------------------------ | ------------------------------------------- |
+| `json:"name"`                  | JSON field name is `name`                   |
+| `json:"description,omitempty"` | Omit field if empty in output               |
+| `json:"created_at"`            | Snake_case in JSON is conventional for APIs |
+
 
 **Encoding** (struct → JSON bytes):
 
@@ -185,12 +191,14 @@ Always set `Content-Type: application/json` before writing JSON. Clients use thi
 
 ### Methods — what the client wants to do
 
-| Method | Meaning | Idempotent? | Typical use |
-|--------|---------|-------------|-------------|
-| GET | Read | Yes | Fetch one or list |
-| POST | Create | No | Create new resource |
-| PATCH | Partial update | No* | Change some fields |
-| DELETE | Remove | Yes | Delete resource |
+
+| Method | Meaning        | Idempotent? | Typical use         |
+| ------ | -------------- | ----------- | ------------------- |
+| GET    | Read           | Yes         | Fetch one or list   |
+| POST   | Create         | No          | Create new resource |
+| PATCH  | Partial update | No*         | Change some fields  |
+| DELETE | Remove         | Yes         | Delete resource     |
+
 
 *PATCH is often treated as non-idempotent in practice.
 
@@ -206,14 +214,16 @@ Nested: `GET /projects/{id}/tasks` — tasks belonging to a project.
 
 ### Status codes — the outcome in one number
 
-| Code | Name | When to use |
-|------|------|-------------|
-| 200 | OK | Successful GET, PATCH |
-| 201 | Created | Successful POST |
-| 204 | No Content | Successful DELETE (no body) |
-| 400 | Bad Request | Invalid JSON, missing required field |
-| 404 | Not Found | ID does not exist |
-| 500 | Internal Server Error | Unexpected bug — log details, return generic message |
+
+| Code | Name                  | When to use                                          |
+| ---- | --------------------- | ---------------------------------------------------- |
+| 200  | OK                    | Successful GET, PATCH                                |
+| 201  | Created               | Successful POST                                      |
+| 204  | No Content            | Successful DELETE (no body)                          |
+| 400  | Bad Request           | Invalid JSON, missing required field                 |
+| 404  | Not Found             | ID does not exist                                    |
+| 500  | Internal Server Error | Unexpected bug — log details, return generic message |
+
 
 **Rule:** never return `200` with `{"error":"..."}` in the body. Use the correct status code. Clients, caches, and monitors depend on it.
 
@@ -263,7 +273,7 @@ func handler(w http.ResponseWriter, r *http.Request)
 
 **Order matters when writing a response:**
 
-1. Set headers (`w.Header().Set(...)`)
+1. aSet headers (`w.Header().Set(...)`)
 2. Call `w.WriteHeader(status)` — only if not 200 (200 is default on first write)
 3. Write body (`Encode`, `Fprint`, etc.)
 
@@ -381,18 +391,20 @@ func (s *MemoryStore) CreateProject(p Project) {
 
 ### Methods to implement
 
-| Method | Behavior |
-|--------|----------|
-| `ListProjects()` | Return all projects (as slice) |
-| `GetProject(id)` | Return project + `true`, or zero value + `false` |
-| `CreateProject(p)` | Store and return |
-| `UpdateProject(p)` | Replace if exists |
-| `DeleteProject(id)` | Remove project and all its tasks |
-| `ListTasksByProject(projectID)` | Filter tasks by `project_id` |
-| `GetTask(id)` | Return task + found bool |
-| `CreateTask(t)` | Store and return |
-| `UpdateTask(t)` | Replace if exists |
-| `DeleteTask(id)` | Remove task |
+
+| Method                          | Behavior                                         |
+| ------------------------------- | ------------------------------------------------ |
+| `ListProjects()`                | Return all projects (as slice)                   |
+| `GetProject(id)`                | Return project + `true`, or zero value + `false` |
+| `CreateProject(p)`              | Store and return                                 |
+| `UpdateProject(p)`              | Replace if exists                                |
+| `DeleteProject(id)`             | Remove project and all its tasks                 |
+| `ListTasksByProject(projectID)` | Filter tasks by `project_id`                     |
+| `GetTask(id)`                   | Return task + found bool                         |
+| `CreateTask(t)`                 | Store and return                                 |
+| `UpdateTask(t)`                 | Replace if exists                                |
+| `DeleteTask(id)`                | Remove task                                      |
+
 
 **Instruction:** Create `internal/model/` for `Project` and `Task` structs. Create the store in `internal/store/memory.go` or temporarily in `main.go` — but separate files are good practice now.
 
@@ -474,12 +486,14 @@ Response: `200` or `404`
 
 ### Stretch (recommended before Phase 2)
 
-| Endpoint | Notes |
-|----------|-------|
-| `PATCH /projects/{id}` | Update name/description; bump `updated_at` |
+
+| Endpoint                | Notes                                      |
+| ----------------------- | ------------------------------------------ |
+| `PATCH /projects/{id}`  | Update name/description; bump `updated_at` |
 | `DELETE /projects/{id}` | Remove project + its tasks; `204` or `200` |
-| `PATCH /tasks/{id}` | Update title/status |
-| `DELETE /tasks/{id}` | Remove task |
+| `PATCH /tasks/{id}`     | Update title/status                        |
+| `DELETE /tasks/{id}`    | Remove task                                |
+
 
 ---
 
@@ -595,14 +609,16 @@ Document in `README.md`:
 
 ## 14. Common mistakes
 
-| Mistake | Why it is wrong | Fix |
-|---------|-----------------|-----|
-| `200` on errors | Clients cannot distinguish success | Use 4xx/5xx |
-| No `Content-Type` header | Clients may misparse | Always set for JSON |
-| Trusting IDs from request body for ownership | Spoofing | Take `project_id` from URL path |
-| Map without mutex | Data races under concurrent requests | `sync.Mutex` around map access |
-| Giant handlers with everything inline | Unmaintainable; blocks Phase 2 | Extract store, use handler pattern |
-| `panic` on bad user input | Crashes whole server | Return 400, log 500 for real bugs |
+
+| Mistake                                      | Why it is wrong                      | Fix                                |
+| -------------------------------------------- | ------------------------------------ | ---------------------------------- |
+| `200` on errors                              | Clients cannot distinguish success   | Use 4xx/5xx                        |
+| No `Content-Type` header                     | Clients may misparse                 | Always set for JSON                |
+| Trusting IDs from request body for ownership | Spoofing                             | Take `project_id` from URL path    |
+| Map without mutex                            | Data races under concurrent requests | `sync.Mutex` around map access     |
+| Giant handlers with everything inline        | Unmaintainable; blocks Phase 2       | Extract store, use handler pattern |
+| `panic` on bad user input                    | Crashes whole server                 | Return 400, log 500 for real bugs  |
+
 
 ---
 
