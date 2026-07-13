@@ -16,6 +16,18 @@ Projects and tasks describe *what* you might work on. **Time entries** record *w
 | Query param filters | `?status=done` on task lists |
 | `GET /reports/summary` | Aggregated minutes per project in a date range |
 
+**Same habit:** [The endpoint recipe](./the-endpoint-recipe.md). Time entries and reports are **new contracts** — walk the full recipe for each; do not only add a handler.
+
+| Recipe step | Phase 4 focus |
+|-------------|----------------|
+| Contract | Nested time-entry routes + report query params (`from`, `to`) |
+| Model | `TimeEntry` (+ optional soft-delete fields later) |
+| Data | Time-entry repo + aggregation for summary |
+| Business | Authz chain (user owns task/project); validate minutes/dates |
+| Handler | Nested paths; parse query params for report |
+| Wire | Register new routes behind auth middleware |
+| Verify | Full curl flow (login → project → task → entry → summary) + tests |
+
 ---
 
 ## 1. Time entry domain
@@ -359,17 +371,21 @@ Reports should exclude time on soft-deleted tasks (filter in aggregation or serv
 
 ---
 
-## 11. Build order
+## 11. Build order (recipe order)
 
-1. TimeEntry model + indexes
-2. Time entry repository
-3. Service with authorization chain
-4. Handlers for list/create/delete
-5. Task status filter on list endpoint
-6. Report repository with aggregation
-7. Report handler + date validation
-8. Tests: invalid date range, wrong user's task, empty report
-9. README API docs
+For **each** new endpoint (`POST .../time-entries`, `GET .../time-entries`, `DELETE /time-entries/{id}`, `GET /reports/summary`), fill the recipe card first, then:
+
+| Step | Recipe | What to build |
+|------|--------|---------------|
+| 1 | Model | `TimeEntry` + indexes |
+| 2 | Data | Time entry repository methods |
+| 3 | Business | Service with authorization chain |
+| 4 | Handler + wire | List / create / delete — curl each before the next |
+| 5 | Handler | Task list `?status=` filter |
+| 6 | Data + business | Report aggregation in repo + date validation in service |
+| 7 | Handler + wire | Report handler |
+| 8 | Verify | Tests: bad date range, wrong user's task, empty report |
+| 9 | Docs | README API table + curl walkthrough |
 
 ---
 
@@ -428,4 +444,5 @@ Manually verify totals: add entries with known minutes, confirm summary sums mat
 
 ---
 
-**Next:** [Phase 5 Manual — Concurrency & Resilience](./phase-05-concurrency-resilience.md)
+**Next:** [Phase 5 Manual — Concurrency & Resilience](./phase-05-concurrency-resilience.md)  
+**Always:** [The endpoint recipe](./the-endpoint-recipe.md)

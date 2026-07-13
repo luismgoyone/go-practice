@@ -18,6 +18,20 @@ Phase 1 data vanishes on restart. Phase 2 gives Desklog **persistent storage** w
 
 Your HTTP routes stay almost the same. You swap the storage layer and split responsibilities.
 
+**Same habit as Phase 1:** still follow [The endpoint recipe](./the-endpoint-recipe.md). This phase only changes *what* sits under the handler.
+
+| Recipe step | Phase 1 | Phase 2 |
+|-------------|---------|---------|
+| Contract | method / path / JSON / statuses | Same routes; IDs become ObjectID hex strings in JSON |
+| Model | `internal/model` + JSON tags | Add BSON tags; `primitive.ObjectID` for IDs |
+| Data | `internal/store` (maps) | `internal/repository` (MongoDB) |
+| Business rules | Mostly in handler | `internal/service` |
+| Handler | parse → store → respond | parse → **service** → respond (no Mongo imports) |
+| Wire | `main` creates store | `main` creates client, repos, services, handlers |
+| Verify | curl | curl + restart server (data must persist) |
+
+When you migrate or add an endpoint: **contract → model → repository method → service method → handler → wire → curl**. Do not put MongoDB calls in handlers.
+
 ---
 
 ## 1. Layered architecture
@@ -520,18 +534,23 @@ Pick one approach and use it for all entities.
 
 ---
 
-## 11. Build order for this phase
+## 11. Build order for this phase (recipe order)
 
-1. Model structs with BSON + JSON tags
-2. MongoDB connection in `main`
-3. Project repository (CRUD)
-4. Task repository (CRUD + ListByProject + DeleteByProjectID)
-5. Project service + task service
-6. Handlers — migrate from Phase 1 one endpoint at a time
-7. Indexes
-8. Update README with MongoDB setup
+Work **one vertical slice at a time** (e.g. `POST /projects` end-to-end), then the next route. Do not rewrite every file before testing.
 
-Test each endpoint with `curl` after migrating it. Do not migrate everything at once without testing.
+| Step | Recipe | What to build | Where |
+|------|--------|---------------|-------|
+| 1 | Model | Structs with BSON + JSON tags | `internal/model/` |
+| 2 | Wire (partial) | Mongo client from env (`MONGODB_URI`, DB name) | `cmd/api/main.go` |
+| 3 | Data | Project repository CRUD | `internal/repository/` |
+| 4 | Business | Project service | `internal/service/` |
+| 5 | Handler + wire | Migrate **one** project endpoint; curl it | `internal/handler/` + `main` |
+| 6 | Repeat 3–5 | Task repo (incl. ListByProject, DeleteByProjectID) → service → handlers | same packages |
+| 7 | Data extras | Indexes | scripts / startup |
+| 8 | Verify | Restart server — data still there | curl + mongosh |
+| 9 | Docs | Mongo setup in README | `README.md` |
+
+**Reminder:** for each endpoint, fill the recipe card in [the-endpoint-recipe.md](./the-endpoint-recipe.md) before coding.
 
 ---
 
@@ -588,5 +607,7 @@ db.tasks.find().pretty()
 **Commit:** `feat(phase-2): mongodb persistence and layered architecture`
 
 ---
+
+**Always:** [The endpoint recipe](./the-endpoint-recipe.md)
 
 **Next:** [Phase 3 Manual — Auth, Validation & Tests](./phase-03-auth-validation-tests.md)

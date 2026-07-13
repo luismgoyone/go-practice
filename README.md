@@ -53,24 +53,28 @@ GET    /reports/summary?from=&to=
 |----------|---------|
 | [PROJECT.md](./PROJECT.md) | Roadmap — phases, deliverables, acceptance criteria |
 | [guides/](./guides/) | **Phase manuals** — self-contained lessons (start here) |
+| [The endpoint recipe](./guides/the-endpoint-recipe.md) | Same 7 steps for every new endpoint |
 
 **Workflow:**
 
-1. Open the manual for your current phase.
-2. Read and build section by section.
-3. Pass the phase exit checklist.
-4. Commit and move to the next phase.
+1. Skim [the endpoint recipe](./guides/the-endpoint-recipe.md).
+2. Open the manual for your current phase.
+3. Build in recipe order (Phase 1 has full copy-paste steps).
+4. Pass the phase exit checklist and commit.
+5. After Phase 6, take the [final quiz](./guides/final-quiz.md).
 
 ### Phase manuals
 
 | Phase | Manual | Focus |
 |-------|--------|-------|
-| 1 | [HTTP & Go basics](./guides/phase-01-http-and-go-basics.md) | In-memory API |
+| — | [Endpoint recipe](./guides/the-endpoint-recipe.md) | How to start any new endpoint |
+| 1 | [HTTP & Go basics](./guides/phase-01-http-and-go-basics.md) | In-memory API (beginner steps) |
 | 2 | [MongoDB & structure](./guides/phase-02-mongodb-and-structure.md) | Persistence + layers |
 | 3 | [Auth, validation & tests](./guides/phase-03-auth-validation-tests.md) | Users, JWT, tests |
 | 4 | [Time entries & reporting](./guides/phase-04-time-entries-reporting.md) | Aggregations |
 | 5 | [Concurrency & resilience](./guides/phase-05-concurrency-resilience.md) | Workers, shutdown |
 | 6 | [Ship it](./guides/phase-06-ship-it.md) | Docker, CI, portfolio |
+| Capstone | [Final quiz](./guides/final-quiz.md) | Implement a new contract solo |
 
 ### Progress
 
@@ -82,6 +86,7 @@ GET    /reports/summary?from=&to=
 | 4 — Time entries + reporting | [ ] |
 | 5 — Workers + graceful shutdown | [ ] |
 | 6 — Docker + CI + docs | [ ] |
+| Capstone — final quiz (project notes) | [ ] |
 
 ## Getting started (Phase 1)
 

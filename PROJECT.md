@@ -55,12 +55,14 @@ GET    /reports/summary?from=&to=
 
 | Phase | Manual |
 |-------|--------|
+| Recipe | [The endpoint recipe](./guides/the-endpoint-recipe.md) — use for every new endpoint |
 | 1 | [HTTP & Go basics](./guides/phase-01-http-and-go-basics.md) |
 | 2 | [MongoDB & structure](./guides/phase-02-mongodb-and-structure.md) |
 | 3 | [Auth, validation & tests](./guides/phase-03-auth-validation-tests.md) |
 | 4 | [Time entries & reporting](./guides/phase-04-time-entries-reporting.md) |
 | 5 | [Concurrency & resilience](./guides/phase-05-concurrency-resilience.md) |
 | 6 | [Ship it](./guides/phase-06-ship-it.md) |
+| Capstone | [Final quiz — new contract](./guides/final-quiz.md) |
 
 ### Suggested weekly rhythm
 
@@ -475,6 +477,7 @@ db.time_entries.aggregate([
 | 4     | Time entries + reporting         | [ ]  |
 | 5     | Workers + graceful shutdown      | [ ]  |
 | 6     | Docker + CI + docs               | [ ]  |
+| Quiz  | [Final quiz — new contract](./guides/final-quiz.md) | [ ]  |
 
 ---
 
@@ -483,7 +486,7 @@ db.time_entries.aggregate([
 ```bash
 cd go-practice
 go mod init github.com/<you>/go-practice   # use your module path
-mkdir -p cmd/api internal/{handler,service,repository,model} scripts
+mkdir -p cmd/api internal/model internal/store internal/handler
 ```
 
-Implement Phase 1 only. When `/health` and one CRUD flow work, commit and mark Phase 1 done in the table above.
+Read [the endpoint recipe](./guides/the-endpoint-recipe.md), then follow [Phase 1](./guides/phase-01-http-and-go-basics.md) Part B step by step. When `/health` and project/task flows work, commit and mark Phase 1 done. After Phase 6, take the final quiz.

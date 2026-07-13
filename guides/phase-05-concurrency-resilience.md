@@ -16,6 +16,16 @@ Desklog's features are complete. Phase 5 makes the **process** behave well: shut
 | Background worker | Async jobs (webhook on task completed) |
 | Bounded job queue | Prevent unbounded goroutines |
 
+**Same habit:** [The endpoint recipe](./the-endpoint-recipe.md) still applies when you touch HTTP. Most of Phase 5 is **process** work (shutdown, workers) wired in `main` — not a new folder layout.
+
+| If you are… | Follow |
+|-------------|--------|
+| Adding/changing an HTTP endpoint | Full recipe (contract → … → verify) |
+| Adding graceful shutdown / timeouts | Change server construction in `cmd/api/main.go`; pass `context` through service/repo calls you already have |
+| Adding background jobs | Queue + worker types (e.g. `internal/worker` or similar); **enqueue from service** when a domain event happens (task → done); start worker in `main` |
+
+Do not sprinkle `go func()` inside handlers without a bounded queue — that skips the “wire dependencies in main” part of the recipe.
+
 ---
 
 ## 1. Concurrency you already have
@@ -350,6 +360,8 @@ Invalidate on new time entry (stretch) or accept staleness for simplicity.
 
 ## 8. Wire in main
 
+Still the recipe’s **wire** step: construct worker once, inject into services, register HTTP as before, shut down in reverse order of creation.
+
 ```go
 workerCtx, workerCancel := context.WithCancel(context.Background())
 var workerWg sync.WaitGroup
@@ -416,4 +428,5 @@ Mark task done → check logs for worker processing webhook/log **after** respon
 
 ---
 
-**Next:** [Phase 6 Manual — Ship It](./phase-06-ship-it.md)
+**Next:** [Phase 6 Manual — Ship It](./phase-06-ship-it.md)  
+**Always:** [The endpoint recipe](./the-endpoint-recipe.md)

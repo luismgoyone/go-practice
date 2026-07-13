@@ -18,6 +18,20 @@ You built a real backend. Phase 6 is about **delivery** — packaging Desklog so
 | Portfolio README | Architecture, setup, API examples |
 | Release tag | Milestone marker (`v0.1.0`) |
 
+**Same habit:** [The endpoint recipe](./the-endpoint-recipe.md). Shipping is mostly ops, but `/ready` is still a normal endpoint:
+
+| Recipe step | `/ready` |
+|-------------|----------|
+| Contract | `GET /ready` → `200 {"status":"ready"}` or `503` if DB down |
+| Model | None |
+| Data | Ping Mongo via existing client |
+| Business | None beyond “DB reachable?” |
+| Handler | `ReadyHandler` in `internal/handler/` (or health file) |
+| Wire | Register in `main` next to `/health` |
+| Verify | Stop Mongo → 503; start Mongo → 200 |
+
+Docker/CI/README are verify-and-deliver steps for the whole API, not a different coding style.
+
 ---
 
 ## 1. Liveness vs readiness
@@ -447,10 +461,17 @@ Desklog is a foundation. Natural extensions (not required now):
 - **Frontend** — React app consuming your API
 - **OpenAPI** — machine-readable spec for clients
 
+Before inventing features randomly, prove the habit:
+
+### Capstone quiz
+
+Do **[Final quiz — ship a new contract](./final-quiz.md)** without looking up a walkthrough. If you can fill the recipe card and implement the endpoint cleanly, Phase 1–6 worked.
+
 Depth on one service teaches more than jumping to microservices. Ship one more feature on Desklog before splitting anything.
 
 ---
 
 Congratulations — you built and shipped a Go backend.
 
+**Always:** [The endpoint recipe](./the-endpoint-recipe.md)  
 **Back to index:** [guides/README.md](./README.md)

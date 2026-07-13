@@ -1,13 +1,23 @@
 # Phase 1 Manual — HTTP & Go Basics
 
 **Duration:** 1–2 weeks  
-**You need:** Go 1.22+, a terminal, `curl`
+**You need:** Go 1.22+, a terminal, `curl`  
+**Audience:** First Go / first backend API — this manual is written for beginners
 
-This document is your manual for Phase 1. Everything you need to understand and build is here — concepts first, then instructions with context. Work top to bottom. Do not skip sections.
+**How to use this document**
+
+1. Read **Part A** (concepts) so the words make sense.
+2. Follow **Part B** (build steps) in order. Each step gives **full file contents**, explains **why** each block exists, then asks you to **run and curl** before continuing.
+3. Keep [The endpoint recipe](./the-endpoint-recipe.md) open — every step is that recipe in slow motion.
+4. Do not skip ahead to “all endpoints.” Finish one step’s check before the next.
+
+Replace `github.com/<you>/go-practice` with your real module path from `go.mod` everywhere you see it.
 
 ---
 
-## 0. What you are building
+# Part A — Concepts (read first)
+
+## A0. What you are building
 
 **Desklog** is a work-log API. In Phase 1 it tracks **projects** and **tasks** in memory (RAM). When the server stops, data disappears. That is intentional.
 
@@ -15,402 +25,300 @@ By the end of this phase you will have:
 
 - A Go program that listens on a port
 - HTTP endpoints that accept and return JSON
-- CRUD operations for projects and tasks
+- CRUD-style operations for projects and tasks
 - Correct status codes and error responses
+- A habit: **contract → model → store → handler → wire → verify**
 
-This is a real backend shape. Phases 2–6 add persistence, users, reporting, and deployment on top of the same structure.
-
----
-
-## 1. How a backend API works
-
-A **backend API** is a program that waits for **HTTP requests** over the network and sends back **HTTP responses**.
-
-A request has:
-
-
-| Part    | Example                          | Meaning                                  |
-| ------- | -------------------------------- | ---------------------------------------- |
-| Method  | `GET`, `POST`, `PATCH`, `DELETE` | What action the client wants             |
-| Path    | `/projects/abc123`               | Which resource                           |
-| Headers | `Content-Type: application/json` | Metadata about the request               |
-| Body    | `{"name":"go-practice"}`         | Payload (optional; common on POST/PATCH) |
-
-
-A response has:
-
-
-| Part        | Example                                | Meaning                     |
-| ----------- | -------------------------------------- | --------------------------- |
-| Status code | `200`, `201`, `404`                    | Outcome in one number       |
-| Headers     | `Content-Type: application/json`       | Metadata about the response |
-| Body        | `{"id":"abc123","name":"go-practice"}` | Payload (optional)          |
-
-
-**Your job as a backend developer:** receive the request, do something (read/write data, validate input), return a response. In Go, the function that does this is called a **handler**.
+Phases 2–6 add MongoDB, auth, reporting, and deployment on top of this habit — not a different one.
 
 ---
 
-## 2. Go modules — your project's identity
+## A1. How a backend API works
 
-Go code is organized into **packages**. Related packages live in a **module**, defined by a `go.mod` file at the project root.
+A **backend API** waits for **HTTP requests** and sends **HTTP responses**.
 
-The module path (e.g. `github.com/you/go-practice`) is:
+| Request part | Example | Meaning |
+|--------------|---------|---------|
+| Method | `GET`, `POST`, `PATCH`, `DELETE` | Action |
+| Path | `/projects/abc123` | Which resource |
+| Headers | `Content-Type: application/json` | Metadata |
+| Body | `{"name":"go-practice"}` | Payload (often on POST/PATCH) |
 
-- The name you use to import your own packages later
-- What appears in `go.mod` and import statements
+| Response part | Example | Meaning |
+|---------------|---------|---------|
+| Status code | `200`, `201`, `404` | Outcome |
+| Headers | `Content-Type: application/json` | Metadata |
+| Body | `{"id":"...","name":"..."}` | Payload |
 
-**Instruction:** From your project root, run:
+The Go function that handles one route is a **handler**.
+
+---
+
+## A2. Modules, packages, folders
+
+- A **module** (`go.mod`) is your project identity and import path.
+- A **package** is a folder of `.go` files that all start with the same `package name`.
+- **Every** `.go` file in a package must be valid. An empty `task.go` breaks the whole `handler` package.
+
+| Path | Job |
+|------|-----|
+| `cmd/api/main.go` | Start server, create store, register routes only |
+| `internal/model/` | Structs (`Project`, `Task`) — no HTTP |
+| `internal/store/` | In-memory maps + mutex + CRUD methods |
+| `internal/handler/` | HTTP: parse, validate, call store, write JSON |
+
+`internal/` means other modules cannot import these packages.
+
+**Do not** create `service/` or `repository/` yet — Phase 2.
+
+---
+
+## A3. Types you need
+
+**Struct** — named fields:
+
+```go
+type Project struct {
+	ID   string
+	Name string
+}
+```
+
+Capitalized fields are **exported** (usable from other packages).
+
+**Slice** — list: `[]Project`  
+**Map** — lookup by ID: `map[string]Project`  
+**Error** — check `if err != nil` immediately. Go has no exceptions.
+
+Pointers (`*http.Request`, `*MemoryStore`) mean “this value can be shared/modified.” You do not need deep pointer theory for Phase 1.
+
+---
+
+## A4. JSON
+
+APIs speak JSON. Struct **tags** control field names:
+
+```go
+Name string `json:"name"`
+```
+
+| Tag | Effect |
+|-----|--------|
+| `json:"name"` | JSON key is `name` |
+| `json:"description,omitempty"` | Omit if empty |
+| `json:"created_at"` | Snake_case in JSON |
+
+Encode to response: `json.NewEncoder(w).Encode(v)`  
+Decode from body: `json.NewDecoder(r.Body).Decode(&req)`
+
+Always set `Content-Type: application/json` before writing JSON.
+
+---
+
+## A5. Methods and status codes
+
+| Method | Typical use |
+|--------|-------------|
+| GET | Read |
+| POST | Create |
+| PATCH | Partial update |
+| DELETE | Remove |
+
+| Code | When |
+|------|------|
+| 200 | Successful GET/PATCH |
+| 201 | Successful POST |
+| 204 | Successful DELETE (no body) |
+| 400 | Bad JSON / validation |
+| 404 | ID not found |
+| 500 | Unexpected bug |
+
+Never return `200` with `{"error":"..."}`. Use the real status code.
+
+---
+
+## A6. Handler pattern (memorize this)
+
+```
+1. Parse    — path params, JSON body
+2. Validate — required fields, allowed values
+3. Execute  — call store
+4. Respond  — JSON + status
+5. On error — {"error":"..."} + 4xx/5xx
+```
+
+That is steps 5–7 of [the recipe](./the-endpoint-recipe.md) in more detail.
+
+---
+
+# Part B — Build steps (do these in order)
+
+Each step: **create/replace files → read the “why” → run check → only then continue.**
+
+---
+
+## Step 1 — Module and folders
+
+**Goal:** Go knows your module; folders exist for later files.
 
 ```bash
+cd /path/to/go-practice
 go mod init github.com/<you>/go-practice
+mkdir -p cmd/api internal/model internal/store internal/handler
 ```
 
-Replace `<you>` with your GitHub username or any unique path. This creates `go.mod`. Every time you add an import and build, run `go mod tidy` to sync dependencies.
+**Why**
 
-**Folder convention:** Put the runnable program in `cmd/api/`. The `cmd/` folder is a Go community convention meaning "things you execute." `internal/` (Phase 2) means "packages only this module can import."
+| Piece | Why |
+|-------|-----|
+| `go mod init` | Creates `go.mod` so imports like `github.com/<you>/go-practice/internal/handler` work |
+| `cmd/api` | Convention for the runnable program (`go run ./cmd/api`) |
+| `internal/...` | Private packages for model, store, handlers |
 
-```bash
-mkdir -p cmd/api
-```
+**Check:** `go.mod` exists and folders are present. No server yet.
 
 ---
 
-## 3. Go types you will use
+## Step 2 — Health endpoint only
 
-### Structs — named bundles of fields
+**Recipe for this step:** contract → handler → wire → verify (no model/store yet).
 
-A **struct** groups related data. Desklog's core entities are structs:
+**Contract**
+
+- `GET /health`
+- Success: `200` + `{"status":"ok"}`
+- No auth, no body
+
+### File: `internal/handler/health.go` (full file)
 
 ```go
-type Project struct {
-	ID          string
-	Name        string
-	Description string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+package handler
+
+import (
+	"fmt"
+	"net/http"
+)
+
+// HealthHandler answers GET /health.
+// It proves the process is alive. No store, no database.
+func HealthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	fmt.Fprint(w, `{"status":"ok"}`)
 }
 ```
 
-`time.Time` is Go's built-in type for timestamps. `string` is text. Each field has a type. Fields starting with a capital letter are **exported** (visible outside the package).
+**Why this block**
 
-### Slices — ordered lists
+| Line / idea | Why |
+|-------------|-----|
+| `package handler` | All handler files share this package name |
+| `HealthHandler` capitalized | So `main` can call `handler.HealthHandler` |
+| Set `Content-Type` | Clients know the body is JSON |
+| Fixed JSON string | Health needs no structs yet |
+| **No** `func main` here | Server startup belongs only in `cmd/api` |
 
-```go
-projects := []Project{}           // empty slice
-projects = append(projects, p)    // add one
-```
-
-Use slices for "list all projects."
-
-### Maps — lookup by key
-
-```go
-projects := map[string]Project{}  // key = ID string
-projects[p.ID] = p                // store
-p, ok := projects[id]             // lookup; ok is false if missing
-```
-
-Use maps for "get project by ID." Keys must be comparable; strings work well for IDs in Phase 1.
-
-### Pointers — when you need them (brief)
-
-Phase 1 rarely needs pointers. You will see `*http.Request` and `http.ResponseWriter` in handlers — interfaces/types passed by reference so the handler can write the response. You do not need to master pointers yet; know they exist.
-
-### Errors — Go has no exceptions
-
-Functions that can fail return an `error` as the last return value:
-
-```go
-result, err := doSomething()
-if err != nil {
-	// handle failure — return HTTP 500, log, etc.
-	return
-}
-// use result
-```
-
-**Idiom:** always check `err != nil` immediately. Ignoring errors is the most common beginner bug.
-
----
-
-## 4. JSON — the language of APIs
-
-Clients and servers exchange **JSON** (JavaScript Object Notation). It looks like:
-
-```json
-{"name": "go-practice", "description": "Learning Go"}
-```
-
-Go structs map to JSON with **struct tags** — strings after fields:
-
-```go
-type Project struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-}
-```
-
-
-| Tag                            | Effect                                      |
-| ------------------------------ | ------------------------------------------- |
-| `json:"name"`                  | JSON field name is `name`                   |
-| `json:"description,omitempty"` | Omit field if empty in output               |
-| `json:"created_at"`            | Snake_case in JSON is conventional for APIs |
-
-
-**Encoding** (struct → JSON bytes):
-
-```go
-w.Header().Set("Content-Type", "application/json")
-w.WriteHeader(http.StatusOK)
-json.NewEncoder(w).Encode(project)
-```
-
-**Decoding** (JSON body → struct):
-
-```go
-var req struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-	// invalid JSON → 400 Bad Request
-	return
-}
-defer r.Body.Close()
-```
-
-Always set `Content-Type: application/json` before writing JSON. Clients use this to parse correctly.
-
----
-
-## 5. HTTP methods and status codes
-
-### Methods — what the client wants to do
-
-
-| Method | Meaning        | Idempotent? | Typical use         |
-| ------ | -------------- | ----------- | ------------------- |
-| GET    | Read           | Yes         | Fetch one or list   |
-| POST   | Create         | No          | Create new resource |
-| PATCH  | Partial update | No*         | Change some fields  |
-| DELETE | Remove         | Yes         | Delete resource     |
-
-
-*PATCH is often treated as non-idempotent in practice.
-
-**REST-ish design** maps resources to paths and methods to actions:
-
-- `GET /projects` — list
-- `POST /projects` — create
-- `GET /projects/{id}` — get one
-- `PATCH /projects/{id}` — update
-- `DELETE /projects/{id}` — delete
-
-Nested: `GET /projects/{id}/tasks` — tasks belonging to a project.
-
-### Status codes — the outcome in one number
-
-
-| Code | Name                  | When to use                                          |
-| ---- | --------------------- | ---------------------------------------------------- |
-| 200  | OK                    | Successful GET, PATCH                                |
-| 201  | Created               | Successful POST                                      |
-| 204  | No Content            | Successful DELETE (no body)                          |
-| 400  | Bad Request           | Invalid JSON, missing required field                 |
-| 404  | Not Found             | ID does not exist                                    |
-| 500  | Internal Server Error | Unexpected bug — log details, return generic message |
-
-
-**Rule:** never return `200` with `{"error":"..."}` in the body. Use the correct status code. Clients, caches, and monitors depend on it.
-
----
-
-## 6. `net/http` — Go's HTTP server
-
-Go's standard library includes a production-capable HTTP server. No framework required for Phase 1.
-
-### Minimal server
+### File: `cmd/api/main.go` (full file for this step)
 
 ```go
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
+
+	"github.com/<you>/go-practice/internal/handler"
 )
 
 func main() {
-	http.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"status":"ok"}`)
-	})
+	// 1. Register routes BEFORE starting the server.
+	http.HandleFunc("GET /health", handler.HealthHandler)
 
+	// 2. ListenAndServe blocks forever. Nothing after this runs
+	//    until the server shuts down — so do not put setup below it.
+	log.Println("listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 ```
 
-**What happens:**
+**Why this block**
 
-1. `HandleFunc` registers a route: method + path → handler function
-2. `ListenAndServe` binds port 8080 and blocks forever, accepting connections
-3. Each request runs the matching handler in its **own goroutine** (lightweight thread)
+| Line / idea | Why |
+|-------------|-----|
+| `package main` + `func main` | Required for `go run ./cmd/api` |
+| Import `internal/handler` | Uses your HealthHandler |
+| `HandleFunc("GET /health", ...)` | Go 1.22+ method+path routing |
+| Setup before `ListenAndServe` | Common beginner bug: code after Listen never runs |
 
-Go 1.22+ supports `"GET /health"` pattern on the default `ServeMux`. Older Go: use `chi` router or check `r.Method` manually inside the handler.
-
-### Handler signature
-
-```go
-func handler(w http.ResponseWriter, r *http.Request)
-```
-
-- `w` — write status, headers, body here
-- `r` — read method, path, headers, body from here
-
-**Order matters when writing a response:**
-
-1. aSet headers (`w.Header().Set(...)`)
-2. Call `w.WriteHeader(status)` — only if not 200 (200 is default on first write)
-3. Write body (`Encode`, `Fprint`, etc.)
-
-If you call `WriteHeader` twice or write body before headers, behavior is undefined.
-
-### Path parameters
-
-For `/projects/{id}`, extract `id` from the path. With Go 1.22+ `ServeMux`:
+**Also create stub packages so empty files do not break builds later.** Until you fill them, each must at least say:
 
 ```go
-id := r.PathValue("id")
+// internal/handler/task.go
+package handler
 ```
 
-With nested routes like `/projects/{id}/tasks`, register the pattern explicitly on `HandleFunc`.
+```go
+// internal/model/project.go and task.go — wait for Step 3, or:
+package model
+```
+
+```go
+// internal/store/memory.go — wait for Step 4, or:
+package store
+```
+
+If a file is completely empty, Go reports `expected 'package', found 'EOF'`.
+
+**Check**
+
+```bash
+go run ./cmd/api
+# other terminal:
+curl -i http://localhost:8080/health
+```
+
+Expect `200` and `{"status":"ok"}`. Stop the server with Ctrl+C when done.
 
 ---
 
-## 7. The handler pattern — parse, call, respond
+## Step 3 — Models
 
-Every handler should follow the same steps. This keeps HTTP concerns separate from data logic (and makes Phase 2 easier).
+**Recipe:** contract shapes → model files.
 
-```
-1. Parse   — path params, query params, JSON body
-2. Validate — required fields, allowed values
-3. Execute — call store/service
-4. Respond — JSON + correct status code
-5. On error — consistent error JSON
-```
-
-### Error response helper
-
-Use one shape everywhere:
-
-```json
-{"error": "project not found"}
-```
+### File: `internal/model/project.go` (full file)
 
 ```go
-func writeError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+package model
+
+import "time"
+
+// Project is a container for work (e.g. "go-practice").
+// Defined here so handler and store share one type.
+type Project struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 ```
 
-### Example: POST /projects
+**Why this block**
 
-**Context:** Client sends a name (and optional description). Server creates a project, assigns an ID and timestamps, stores it, returns 201 with the full object.
+| Line / idea | Why |
+|-------------|-----|
+| `type Project` not `type model.Project` | You are *inside* package `model`; other packages write `model.Project` when importing |
+| JSON tags | API uses snake_case keys |
+| `omitempty` on description | Omit empty description from JSON |
+| `time.Time` | Timestamps; we will set them in UTC in the handler |
 
-```go
-func createProjectHandler(store *MemoryStore) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Name        string `json:"name"`
-			Description string `json:"description"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON")
-			return
-		}
-		defer r.Body.Close()
-
-		if req.Name == "" {
-			writeError(w, http.StatusBadRequest, "name is required")
-			return
-		}
-
-		now := time.Now().UTC()
-		project := Project{
-			ID:          uuid.New().String(), // or simple ID generator
-			Name:        req.Name,
-			Description: req.Description,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		}
-
-		store.CreateProject(project)
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(project)
-	}
-}
-```
-
-**Why UTC for timestamps:** servers run in different timezones. Store and return UTC; clients convert for display.
-
----
-
-## 8. In-memory storage
-
-**Context:** Before MongoDB (Phase 2), data lives in Go data structures inside the running process. This lets you focus on HTTP and domain logic without database setup.
-
-### MemoryStore design
+### File: `internal/model/task.go` (full file)
 
 ```go
-type MemoryStore struct {
-	mu       sync.Mutex
-	projects map[string]Project
-	tasks    map[string]Task
-}
-```
+package model
 
-**Why `sync.Mutex`:** Go's HTTP server handles each request concurrently. Two requests updating the same map at once can cause a **race condition** (crash or corrupt data). Lock before read/write:
+import "time"
 
-```go
-func (s *MemoryStore) CreateProject(p Project) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.projects[p.ID] = p
-}
-```
-
-`defer s.mu.Unlock()` runs when the function returns — even on error paths.
-
-### Methods to implement
-
-
-| Method                          | Behavior                                         |
-| ------------------------------- | ------------------------------------------------ |
-| `ListProjects()`                | Return all projects (as slice)                   |
-| `GetProject(id)`                | Return project + `true`, or zero value + `false` |
-| `CreateProject(p)`              | Store and return                                 |
-| `UpdateProject(p)`              | Replace if exists                                |
-| `DeleteProject(id)`             | Remove project and all its tasks                 |
-| `ListTasksByProject(projectID)` | Filter tasks by `project_id`                     |
-| `GetTask(id)`                   | Return task + found bool                         |
-| `CreateTask(t)`                 | Store and return                                 |
-| `UpdateTask(t)`                 | Replace if exists                                |
-| `DeleteTask(id)`                | Remove task                                      |
-
-
-**Instruction:** Create `internal/model/` for `Project` and `Task` structs. Create the store in `internal/store/memory.go` or temporarily in `main.go` — but separate files are good practice now.
-
-### Task model
-
-```go
+// Task is a unit of work inside a project.
 type Task struct {
 	ID        string    `json:"id"`
 	ProjectID string    `json:"project_id"`
@@ -421,115 +329,273 @@ type Task struct {
 }
 ```
 
-When creating a task via `POST /projects/{id}/tasks`:
+**Why this block**
 
-1. Verify project exists → else 404
-2. Set `ProjectID` from path (not from request body — client could lie)
-3. Default `Status` to `"todo"` if empty
-4. Validate status is one of `todo`, `doing`, `done` if provided
+| Line / idea | Why |
+|-------------|-----|
+| `ProjectID` | Links task to project; set from URL later, not trusted from body alone |
+| `Status` string | Simple enum for Phase 1; validate in the handler |
 
----
-
-## 9. Endpoints to build
-
-Build in this order. Each builds on the previous.
-
-### 9.1 `GET /health`
-
-**Purpose:** Load balancers and orchestrators ping this to see if the process is alive. No auth, no DB — always fast.
-
-Response: `200` + `{"status":"ok"}`
-
-### 9.2 `GET /projects`
-
-**Purpose:** List all projects.
-
-Response: `200` + JSON array `[{...}, {...}]`
-
-Empty list: `200` + `[]` (not 404)
-
-### 9.3 `POST /projects`
-
-**Purpose:** Create a project.
-
-Request body: `{"name":"...", "description":"..."}`  
-Response: `201` + created project including `id`  
-Errors: `400` for bad JSON or missing name
-
-### 9.4 `GET /projects/{id}`
-
-**Purpose:** Get one project.
-
-Response: `200` + project  
-Errors: `404` if ID not found
-
-### 9.5 `GET /projects/{id}/tasks`
-
-**Purpose:** List tasks for a project.
-
-First verify project exists → `404` if not.  
-Response: `200` + array of tasks
-
-### 9.6 `POST /projects/{id}/tasks`
-
-**Purpose:** Create a task under a project.
-
-Request body: `{"title":"...", "status":"todo"}`  
-Response: `201` + task  
-Errors: `400` validation, `404` project missing
-
-### 9.7 `GET /tasks/{id}`
-
-**Purpose:** Get one task by ID (without needing project in path).
-
-Response: `200` or `404`
-
-### Stretch (recommended before Phase 2)
-
-
-| Endpoint                | Notes                                      |
-| ----------------------- | ------------------------------------------ |
-| `PATCH /projects/{id}`  | Update name/description; bump `updated_at` |
-| `DELETE /projects/{id}` | Remove project + its tasks; `204` or `200` |
-| `PATCH /tasks/{id}`     | Update title/status                        |
-| `DELETE /tasks/{id}`    | Remove task                                |
-
+**Check:** files save with no red errors. Still no need to run the server for models alone.
 
 ---
 
-## 10. Middleware — wrapping handlers
+## Step 4 — In-memory store
 
-**Context:** Some behavior applies to many routes: logging, auth (Phase 3), timeouts (Phase 5). **Middleware** wraps a handler to run code before and after.
+**Recipe:** data layer. Handlers must not own maps.
+
+Maps need `make(...)` before write, or you panic. `NewMemoryStore` does that. A **mutex** prevents crashes when two requests touch the map at once (HTTP is concurrent).
+
+### File: `internal/store/memory.go` (full file for projects + tasks)
 
 ```go
-func withLogging(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		next(w, r)
-		log.Printf("%s %s %v", r.Method, r.URL.Path, time.Since(start))
+package store
+
+import (
+	"sync"
+
+	"github.com/<you>/go-practice/internal/model"
+)
+
+// MemoryStore holds all Phase 1 data in RAM.
+// Restarting the process clears everything — expected for this phase.
+type MemoryStore struct {
+	mu       sync.Mutex
+	projects map[string]model.Project
+	tasks    map[string]model.Task
+}
+
+// NewMemoryStore constructs an empty store with initialized maps.
+// Call this once from main and pass the pointer into handlers.
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{
+		projects: make(map[string]model.Project),
+		tasks:    make(map[string]model.Task),
 	}
 }
 
-// usage
-http.HandleFunc("GET /health", withLogging(healthHandler))
+func (s *MemoryStore) CreateProject(p model.Project) model.Project {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.projects[p.ID] = p
+	return p
+}
+
+func (s *MemoryStore) ListProjects() []model.Project {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.Project, 0, len(s.projects))
+	for _, p := range s.projects {
+		out = append(out, p)
+	}
+	return out
+}
+
+func (s *MemoryStore) GetProject(id string) (model.Project, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.projects[id]
+	return p, ok
+}
+
+func (s *MemoryStore) UpdateProject(p model.Project) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.projects[p.ID]; !ok {
+		return false
+	}
+	s.projects[p.ID] = p
+	return true
+}
+
+func (s *MemoryStore) DeleteProject(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.projects[id]; !ok {
+		return false
+	}
+	delete(s.projects, id)
+	for tid, t := range s.tasks {
+		if t.ProjectID == id {
+			delete(s.tasks, tid)
+		}
+	}
+	return true
+}
+
+func (s *MemoryStore) CreateTask(t model.Task) model.Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tasks[t.ID] = t
+	return t
+}
+
+func (s *MemoryStore) ListTasksByProject(projectID string) []model.Task {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.Task, 0)
+	for _, t := range s.tasks {
+		if t.ProjectID == projectID {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (s *MemoryStore) GetTask(id string) (model.Task, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tasks[id]
+	return t, ok
+}
+
+func (s *MemoryStore) UpdateTask(t model.Task) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[t.ID]; !ok {
+		return false
+	}
+	s.tasks[t.ID] = t
+	return true
+}
+
+func (s *MemoryStore) DeleteTask(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[id]; !ok {
+		return false
+	}
+	delete(s.tasks, id)
+	return true
+}
 ```
 
-The inner handler stays unchanged. Middleware is how you add cross-cutting concerns without duplicating code.
+**Why this block**
+
+| Line / idea | Why |
+|-------------|-----|
+| `model.Project` / `model.Task` | Types live in `model`; store imports them |
+| `NewMemoryStore` + `make` | Nil maps panic on assign |
+| `sync.Mutex` + `Lock`/`Unlock` | Safe under concurrent HTTP |
+| `defer Unlock` | Unlock even if function returns early |
+| `Get*` returns `(value, bool)` | Caller maps `false` → HTTP 404 |
+| `DeleteProject` removes tasks | Avoid orphan tasks when project is deleted |
+
+**Check:** file compiles conceptually; you will compile for real in Step 5 with handlers.
 
 ---
 
-## 11. Wiring `main.go`
+## Step 5 — POST /projects (first write endpoint)
 
-**Context:** `main` is the composition root — it creates the store, registers routes, starts the server.
+**Recipe:** contract → (model/store done) → handler → wire → verify.
+
+**Contract**
+
+- `POST /projects`
+- Body: `{"name":"...","description":"..."}` (`name` required)
+- Success: `201` + full project including `id` and timestamps
+- Errors: `400` invalid JSON or missing name
+
+### File: `internal/handler/project.go` (start with helpers + create only)
 
 ```go
-func main() {
-	store := NewMemoryStore()
+package handler
 
-	http.HandleFunc("GET /health", healthHandler)
-	http.HandleFunc("GET /projects", listProjectsHandler(store))
-	http.HandleFunc("POST /projects", createProjectHandler(store))
-	// ... register all routes
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/<you>/go-practice/internal/model"
+	"github.com/<you>/go-practice/internal/store"
+)
+
+// writeError sends a consistent error JSON body.
+// Use this for every 4xx/5xx so clients always see {"error":"..."}.
+func writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func newID() string {
+	// Simple unique-enough ID for Phase 1 (no extra dependency).
+	// Phase 2 will use MongoDB ObjectIDs instead.
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// CreateProjectHandler handles POST /projects.
+// Parameter name is "mem" so it does not shadow the imported store package.
+func CreateProjectHandler(mem *store.MemoryStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 1. Parse
+		var req struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		defer r.Body.Close()
+
+		// 2. Validate
+		if req.Name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+
+		// 3. Execute
+		now := time.Now().UTC()
+		project := model.Project{
+			ID:          newID(),
+			Name:        req.Name,
+			Description: req.Description,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		project = mem.CreateProject(project)
+
+		// 4. Respond
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated) // 201
+		_ = json.NewEncoder(w).Encode(project)
+	}
+}
+```
+
+**Why this block**
+
+| Line / idea | Why |
+|-------------|-----|
+| `writeError` | One error shape for all endpoints |
+| `CreateProjectHandler(mem *store.MemoryStore) http.HandlerFunc` | Returns a handler that *closes over* the store — `main` creates one store and passes it in |
+| Decode into anonymous `req` struct | Request body may not match full `Project` (no client-supplied `id`) |
+| Validate `name` | Business rule: name required → 400 |
+| `newID()` + UTC times | Server assigns identity and timestamps |
+| `201` + encode project | Matches create contract |
+| Param named `mem` | Avoids `store` colliding with package name `store` |
+
+### Update `cmd/api/main.go` (full file)
+
+```go
+package main
+
+import (
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/<you>/go-practice/internal/handler"
+	"github.com/<you>/go-practice/internal/store"
+)
+
+func main() {
+	mem := store.NewMemoryStore()
+
+	http.HandleFunc("GET /health", handler.HealthHandler)
+	http.HandleFunc("POST /projects", handler.CreateProjectHandler(mem))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -540,99 +606,370 @@ func main() {
 }
 ```
 
-Read `PORT` from environment so deployment (Phase 6) does not require code changes.
+**Why this block**
 
----
+| Line / idea | Why |
+|-------------|-----|
+| `mem := store.NewMemoryStore()` first | One shared store for all handlers |
+| Pass `mem` into `CreateProjectHandler` | Dependency injection without a framework |
+| `PORT` env | Phase 6 deploy can change port without code edits |
+| All `HandleFunc` before Listen | Wiring complete before accepting traffic |
 
-## 12. Verify with curl
-
-**Context:** `curl` sends HTTP from the terminal. Use it to test every endpoint without writing a client.
+**Check**
 
 ```bash
-# Start server in another terminal
 go run ./cmd/api
 
-# Health
-curl -i http://localhost:8080/health
-
-# Create project
 curl -i -X POST http://localhost:8080/projects \
   -H "Content-Type: application/json" \
   -d '{"name":"go-practice","description":"Phase 1"}'
 
-# List (copy ID from create response)
+curl -i -X POST http://localhost:8080/projects \
+  -H "Content-Type: application/json" \
+  -d 'not json'
+```
+
+Expect `201` with an `id`, then `400` for bad JSON.
+
+---
+
+## Step 6 — GET /projects and GET /projects/{id}
+
+**Contracts**
+
+| Endpoint | Success | Errors |
+|----------|---------|--------|
+| `GET /projects` | `200` + JSON array (empty list = `[]`, not 404) | — |
+| `GET /projects/{id}` | `200` + one project | `404` if missing |
+
+### Add to `internal/handler/project.go`
+
+```go
+// ListProjectsHandler handles GET /projects.
+func ListProjectsHandler(mem *store.MemoryStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projects := mem.ListProjects()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(projects) // 200 by default
+	}
+}
+
+// GetProjectHandler handles GET /projects/{id}.
+func GetProjectHandler(mem *store.MemoryStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id") // from "{id}" in the route pattern
+		project, ok := mem.GetProject(id)
+		if !ok {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(project)
+	}
+}
+```
+
+**Why this block**
+
+| Line / idea | Why |
+|-------------|-----|
+| No JSON decode on GET list | Nothing to parse from body |
+| Encode slice even if empty | `[]` is correct; 404 would mean “route missing,” not “no data” |
+| `r.PathValue("id")` | Reads `{id}` from `GET /projects/{id}` |
+| `ok == false` → 404 | Store signals missing; handler maps to HTTP |
+
+### Register in `main.go`
+
+```go
+http.HandleFunc("GET /projects", handler.ListProjectsHandler(mem))
+http.HandleFunc("GET /projects/{id}", handler.GetProjectHandler(mem))
+```
+
+**Check**
+
+```bash
+# create, copy id from response, then:
 curl -s http://localhost:8080/projects
-
-# Get one
 curl -s http://localhost:8080/projects/<ID>
+curl -i http://localhost:8080/projects/does-not-exist
+```
 
-# Create task
+---
+
+## Step 7 — Task endpoints
+
+**Contracts**
+
+| Endpoint | Behavior |
+|----------|----------|
+| `GET /projects/{id}/tasks` | 404 if project missing; else `200` + task array |
+| `POST /projects/{id}/tasks` | Body `{"title":"...","status":"todo"}`; 404 if project missing; 400 if bad input; 201 + task |
+| `GET /tasks/{id}` | 200 or 404 |
+
+Rules for create:
+
+1. Project must exist  
+2. Set `project_id` from path (never trust body for ownership)  
+3. Default status to `"todo"` if empty  
+4. If status provided, only allow `todo`, `doing`, `done`
+
+### File: `internal/handler/task.go` (full file)
+
+```go
+package handler
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"github.com/<you>/go-practice/internal/model"
+	"github.com/<you>/go-practice/internal/store"
+)
+
+func validStatus(s string) bool {
+	return s == "todo" || s == "doing" || s == "done"
+}
+
+// ListTasksByProjectHandler handles GET /projects/{id}/tasks.
+func ListTasksByProjectHandler(mem *store.MemoryStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("id")
+		if _, ok := mem.GetProject(projectID); !ok {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		tasks := mem.ListTasksByProject(projectID)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(tasks)
+	}
+}
+
+// CreateTaskHandler handles POST /projects/{id}/tasks.
+func CreateTaskHandler(mem *store.MemoryStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projectID := r.PathValue("id")
+		if _, ok := mem.GetProject(projectID); !ok {
+			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+
+		var req struct {
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		defer r.Body.Close()
+
+		if req.Title == "" {
+			writeError(w, http.StatusBadRequest, "title is required")
+			return
+		}
+		if req.Status == "" {
+			req.Status = "todo"
+		}
+		if !validStatus(req.Status) {
+			writeError(w, http.StatusBadRequest, "status must be todo, doing, or done")
+			return
+		}
+
+		now := time.Now().UTC()
+		task := model.Task{
+			ID:        newID(),
+			ProjectID: projectID, // from path, not body
+			Title:     req.Title,
+			Status:    req.Status,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		task = mem.CreateTask(task)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(task)
+	}
+}
+
+// GetTaskHandler handles GET /tasks/{id}.
+func GetTaskHandler(mem *store.MemoryStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		task, ok := mem.GetTask(id)
+		if !ok {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(task)
+	}
+}
+```
+
+**Why this block**
+
+| Line / idea | Why |
+|-------------|-----|
+| Check project before list/create | Nested resource: parent must exist |
+| `ProjectID: projectID` from path | Client cannot attach a task to someone else’s project ID via body |
+| Default + validate status | Keeps data clean |
+| Reuse `writeError` / `newID` | Same package `handler` — shared helpers |
+
+### Register in `main.go`
+
+```go
+http.HandleFunc("GET /projects/{id}/tasks", handler.ListTasksByProjectHandler(mem))
+http.HandleFunc("POST /projects/{id}/tasks", handler.CreateTaskHandler(mem))
+http.HandleFunc("GET /tasks/{id}", handler.GetTaskHandler(mem))
+```
+
+**Check** — use a real project ID from Step 5:
+
+```bash
 curl -i -X POST http://localhost:8080/projects/<PROJECT_ID>/tasks \
   -H "Content-Type: application/json" \
   -d '{"title":"First task"}'
 
-# Bad JSON → expect 400
+curl -s http://localhost:8080/projects/<PROJECT_ID>/tasks
+curl -s http://localhost:8080/tasks/<TASK_ID>
+```
+
+---
+
+## Step 8 — Recipe: adding any new endpoint
+
+You now have enough code to **transfer**. For any new endpoint (including stretch below), fill this out, then code in that order:
+
+```text
+1. Contract:  METHOD /path
+   Request:   ...
+   Success:   STATUS + body
+   Errors:    ...
+
+2. Model:     new fields? → internal/model/
+
+3. Store:     new method? → internal/store/memory.go
+
+4. Rules:     what must be true? (in handler for Phase 1)
+
+5. Handler:   VerbResourceHandler in handler/<resource>.go
+              parse → validate → store → respond
+
+6. Wire:      http.HandleFunc("METHOD /path", handler.Xxx(mem))
+              in cmd/api/main.go BEFORE ListenAndServe
+
+7. Verify:    curl -i ...
+```
+
+That is the same process professionals use. Later phases only swap **store → repository + service**; the order stays.
+
+---
+
+## Step 9 — Stretch (recommended before Phase 2)
+
+Use the recipe above. Store methods `UpdateProject`, `DeleteProject`, `UpdateTask`, `DeleteTask` are already in Step 4.
+
+| Endpoint | Notes |
+|----------|--------|
+| `PATCH /projects/{id}` | Update name/description; bump `updated_at`; 404 if missing |
+| `DELETE /projects/{id}` | Delete project + its tasks; `204` or `200` |
+| `PATCH /tasks/{id}` | Update title/status |
+| `DELETE /tasks/{id}` | Remove task |
+
+Optional logging middleware (wrap a handler; register in `main`):
+
+```go
+func withLogging(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next(w, r)
+		log.Printf("%s %s %v", r.Method, r.URL.Path, time.Since(start))
+	}
+}
+
+// http.HandleFunc("GET /health", withLogging(handler.HealthHandler))
+```
+
+---
+
+## Step 10 — Full curl smoke test
+
+```bash
+go run ./cmd/api
+
+curl -i http://localhost:8080/health
+
+curl -i -X POST http://localhost:8080/projects \
+  -H "Content-Type: application/json" \
+  -d '{"name":"go-practice","description":"Phase 1"}'
+
+curl -s http://localhost:8080/projects
+curl -s http://localhost:8080/projects/<ID>
+
+curl -i -X POST http://localhost:8080/projects/<PROJECT_ID>/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title":"First task"}'
+
 curl -i -X POST http://localhost:8080/projects \
   -H "Content-Type: application/json" \
   -d 'not json'
 
-# Unknown ID → expect 404
-curl -i http://localhost:8080/projects/00000000-0000-0000-0000-000000000000
+curl -i http://localhost:8080/projects/does-not-exist
 ```
 
-`-i` shows response headers including status code. `-s` hides progress noise.
-
-### Race detector
-
-Run with Go's race detector to catch missing mutex usage:
+Race detector (optional):
 
 ```bash
 go run -race ./cmd/api
 ```
 
-Send concurrent requests (shell loop). No race warnings should appear.
-
 ---
 
-## 13. README for this phase
+## Step 11 — README for this phase
 
 Document in `README.md`:
 
-1. What Desklog is (one sentence)
-2. Prerequisites (Go version)
-3. How to run: `go run ./cmd/api`
-4. Default port
-5. List of available endpoints
-6. One example `curl` for create + list
+1. What Desklog is (one sentence)  
+2. Prerequisites (Go version)  
+3. How to run: `go run ./cmd/api`  
+4. Default port  
+5. List of endpoints  
+6. One example curl for create + list  
 
 ---
 
-## 14. Common mistakes
+## Common mistakes
 
-
-| Mistake                                      | Why it is wrong                      | Fix                                |
-| -------------------------------------------- | ------------------------------------ | ---------------------------------- |
-| `200` on errors                              | Clients cannot distinguish success   | Use 4xx/5xx                        |
-| No `Content-Type` header                     | Clients may misparse                 | Always set for JSON                |
-| Trusting IDs from request body for ownership | Spoofing                             | Take `project_id` from URL path    |
-| Map without mutex                            | Data races under concurrent requests | `sync.Mutex` around map access     |
-| Giant handlers with everything inline        | Unmaintainable; blocks Phase 2       | Extract store, use handler pattern |
-| `panic` on bad user input                    | Crashes whole server                 | Return 400, log 500 for real bugs  |
-
+| Mistake | Why wrong | Fix |
+|---------|-----------|-----|
+| Empty `.go` file in a package | Build fails with EOF | At least `package name` |
+| `func main` inside `handler/` | Wrong package; two programs | Only `cmd/api/main.go` |
+| Code after `ListenAndServe` | Never runs | Wire store/routes above it |
+| `type model.Project struct` inside `package model` | Invalid syntax | `type Project struct` |
+| `"uuid"` import | Not a real module path | Use `newID()` or `github.com/google/uuid` |
+| Param named `store` + import `store` | Confusing / shadows | Call it `mem` |
+| Copy-paste create into list handler | List must not decode a body | Call `ListProjects` only |
+| `200` on errors | Clients cannot tell failure | Use 4xx + `writeError` |
+| Map without mutex | Data races | Always Lock around map access |
 
 ---
 
-## 15. Exit checklist
+## Exit checklist
 
-- [ ] `go mod init` and `go run ./cmd/api` work
-- [ ] All endpoints in section 9 respond correctly
-- [ ] Errors return `{"error":"..."}` with correct status
-- [ ] Mutex protects in-memory maps
-- [ ] README documents how to run and test
-- [ ] You can explain: request → handler → store → response
+- [ ] You followed Steps 1–7 (stretch optional)  
+- [ ] `go run ./cmd/api` works  
+- [ ] Health, projects, and tasks match the contracts  
+- [ ] Errors return `{"error":"..."}` with correct status  
+- [ ] Mutex protects maps  
+- [ ] README documents how to run and test  
+- [ ] You can explain: **request → handler → store → response**  
+- [ ] You can add a new endpoint using Step 8 without being told which file  
 
 **Commit:** `feat(phase-1): in-memory projects and tasks API`
 
 ---
 
-**Next:** [Phase 2 Manual — MongoDB & Structure](./phase-02-mongodb-and-structure.md)
+**Next:** [Phase 2 Manual — MongoDB & Structure](./phase-02-mongodb-and-structure.md)  
+**Always:** [The endpoint recipe](./the-endpoint-recipe.md)

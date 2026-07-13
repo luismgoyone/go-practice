@@ -17,6 +17,20 @@ Desklog until now has no concept of "who" is calling the API. Anyone can read an
 | `log.Printf` | Structured JSON logs |
 | No tests | `go test ./...` passes |
 
+**Same habit:** [The endpoint recipe](./the-endpoint-recipe.md). Auth adds middleware and scoping; it does not replace the recipe.
+
+| Recipe step | What changes in Phase 3 |
+|-------------|-------------------------|
+| Contract | New: `POST /auth/register`, `POST /auth/login`; data routes require `Authorization: Bearer …` |
+| Model | `User`; projects/tasks gain `user_id` |
+| Data | User repository; all project/task queries filter by `user_id` |
+| Business | Hash passwords, issue/validate JWT, ownership checks in service |
+| Handler | Auth handlers; data handlers read `user_id` from context (never from body) |
+| Wire | Auth middleware wraps protected routes in `main` |
+| Verify | curl with token **and** `go test ./...` |
+
+For a **new protected endpoint**: contract → model/repo/service as needed → handler → register **behind** auth middleware → curl with Bearer token → add a test if it encodes a security rule.
+
 ---
 
 ## 1. Authentication vs authorization
@@ -501,6 +515,8 @@ Run: `go test ./...`
 
 ## 9. Auth endpoints
 
+Apply the recipe for each of these the same way you did for projects: **contract first**, then model → repo → service → handler → wire → verify.
+
 ### POST /auth/register
 
 Request:
@@ -549,18 +565,22 @@ curl -s http://localhost:8080/projects \
 
 ---
 
-## 10. Build order
+## 10. Build order (recipe order)
 
-1. User model + repository
-2. Register + login handlers (no auth middleware yet)
-3. JWT issue + validate functions
-4. Auth middleware
-5. Add `user_id` to projects — migration: existing dev data can be wiped
-6. Update all project/task queries to scope by user
-7. Validation errors in services
-8. Replace logging with slog
-9. Write tests
-10. Update README with auth flow
+| Step | Recipe | What to build |
+|------|--------|---------------|
+| 1 | Model + data | User model + repository |
+| 2 | Business + handler + wire | Register + login (no middleware yet); curl both |
+| 3 | Business | JWT issue + validate helpers |
+| 4 | Wire | Auth middleware; protect one route; curl 401 then 200 |
+| 5 | Model + data | Add `user_id` to projects (wipe dev data if needed) |
+| 6 | Data + business | Scope all project/task queries by user from context |
+| 7 | Business | Consistent validation errors in services |
+| 8 | Cross-cutting | Replace logging with `slog` |
+| 9 | Verify | Tests listed above; `go test ./...` |
+| 10 | Docs | README auth flow |
+
+Do not “add auth everywhere” before register/login work in isolation.
 
 ---
 
@@ -590,5 +610,7 @@ curl -s http://localhost:8080/projects \
 **Commit:** `feat(phase-3): user auth, validation, and tests`
 
 ---
+
+**Always:** [The endpoint recipe](./the-endpoint-recipe.md)
 
 **Next:** [Phase 4 Manual — Time Entries & Reporting](./phase-04-time-entries-reporting.md)
