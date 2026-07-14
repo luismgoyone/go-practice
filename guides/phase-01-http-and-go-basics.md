@@ -37,18 +37,22 @@ Phases 2–6 add MongoDB, auth, reporting, and deployment on top of this habit �
 
 A **backend API** waits for **HTTP requests** and sends **HTTP responses**.
 
-| Request part | Example | Meaning |
-|--------------|---------|---------|
-| Method | `GET`, `POST`, `PATCH`, `DELETE` | Action |
-| Path | `/projects/abc123` | Which resource |
-| Headers | `Content-Type: application/json` | Metadata |
-| Body | `{"name":"go-practice"}` | Payload (often on POST/PATCH) |
 
-| Response part | Example | Meaning |
-|---------------|---------|---------|
-| Status code | `200`, `201`, `404` | Outcome |
-| Headers | `Content-Type: application/json` | Metadata |
-| Body | `{"id":"...","name":"..."}` | Payload |
+| Request part | Example                          | Meaning                       |
+| ------------ | -------------------------------- | ----------------------------- |
+| Method       | `GET`, `POST`, `PATCH`, `DELETE` | Action                        |
+| Path         | `/projects/abc123`               | Which resource                |
+| Headers      | `Content-Type: application/json` | Metadata                      |
+| Body         | `{"name":"go-practice"}`         | Payload (often on POST/PATCH) |
+
+
+
+| Response part | Example                          | Meaning  |
+| ------------- | -------------------------------- | -------- |
+| Status code   | `200`, `201`, `404`              | Outcome  |
+| Headers       | `Content-Type: application/json` | Metadata |
+| Body          | `{"id":"...","name":"..."}`      | Payload  |
+
 
 The Go function that handles one route is a **handler**.
 
@@ -60,12 +64,14 @@ The Go function that handles one route is a **handler**.
 - A **package** is a folder of `.go` files that all start with the same `package name`.
 - **Every** `.go` file in a package must be valid. An empty `task.go` breaks the whole `handler` package.
 
-| Path | Job |
-|------|-----|
-| `cmd/api/main.go` | Start server, create store, register routes only |
-| `internal/model/` | Structs (`Project`, `Task`) — no HTTP |
-| `internal/store/` | In-memory maps + mutex + CRUD methods |
-| `internal/handler/` | HTTP: parse, validate, call store, write JSON |
+
+| Path                | Job                                              |
+| ------------------- | ------------------------------------------------ |
+| `cmd/api/main.go`   | Start server, create store, register routes only |
+| `internal/model/`   | Structs (`Project`, `Task`) — no HTTP            |
+| `internal/store/`   | In-memory maps + mutex + CRUD methods            |
+| `internal/handler/` | HTTP: parse, validate, call store, write JSON    |
+
 
 `internal/` means other modules cannot import these packages.
 
@@ -102,11 +108,13 @@ APIs speak JSON. Struct **tags** control field names:
 Name string `json:"name"`
 ```
 
-| Tag | Effect |
-|-----|--------|
-| `json:"name"` | JSON key is `name` |
-| `json:"description,omitempty"` | Omit if empty |
-| `json:"created_at"` | Snake_case in JSON |
+
+| Tag                            | Effect             |
+| ------------------------------ | ------------------ |
+| `json:"name"`                  | JSON key is `name` |
+| `json:"description,omitempty"` | Omit if empty      |
+| `json:"created_at"`            | Snake_case in JSON |
+
 
 Encode to response: `json.NewEncoder(w).Encode(v)`  
 Decode from body: `json.NewDecoder(r.Body).Decode(&req)`
@@ -117,21 +125,25 @@ Always set `Content-Type: application/json` before writing JSON.
 
 ## A5. Methods and status codes
 
-| Method | Typical use |
-|--------|-------------|
-| GET | Read |
-| POST | Create |
-| PATCH | Partial update |
-| DELETE | Remove |
 
-| Code | When |
-|------|------|
-| 200 | Successful GET/PATCH |
-| 201 | Successful POST |
-| 204 | Successful DELETE (no body) |
-| 400 | Bad JSON / validation |
-| 404 | ID not found |
-| 500 | Unexpected bug |
+| Method | Typical use    |
+| ------ | -------------- |
+| GET    | Read           |
+| POST   | Create         |
+| PATCH  | Partial update |
+| DELETE | Remove         |
+
+
+
+| Code | When                        |
+| ---- | --------------------------- |
+| 200  | Successful GET/PATCH        |
+| 201  | Successful POST             |
+| 204  | Successful DELETE (no body) |
+| 400  | Bad JSON / validation       |
+| 404  | ID not found                |
+| 500  | Unexpected bug              |
+
 
 Never return `200` with `{"error":"..."}`. Use the real status code.
 
@@ -169,11 +181,13 @@ mkdir -p cmd/api internal/model internal/store internal/handler
 
 **Why**
 
-| Piece | Why |
-|-------|-----|
-| `go mod init` | Creates `go.mod` so imports like `github.com/<you>/go-practice/internal/handler` work |
-| `cmd/api` | Convention for the runnable program (`go run ./cmd/api`) |
-| `internal/...` | Private packages for model, store, handlers |
+
+| Piece          | Why                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------- |
+| `go mod init`  | Creates `go.mod` so imports like `github.com/<you>/go-practice/internal/handler` work |
+| `cmd/api`      | Convention for the runnable program (`go run ./cmd/api`)                              |
+| `internal/...` | Private packages for model, store, handlers                                           |
+
 
 **Check:** `go.mod` exists and folders are present. No server yet.
 
@@ -209,13 +223,15 @@ func HealthHandler(w http.ResponseWriter, r *http.Request) {
 
 **Why this block**
 
-| Line / idea | Why |
-|-------------|-----|
-| `package handler` | All handler files share this package name |
+
+| Line / idea                 | Why                                        |
+| --------------------------- | ------------------------------------------ |
+| `package handler`           | All handler files share this package name  |
 | `HealthHandler` capitalized | So `main` can call `handler.HealthHandler` |
-| Set `Content-Type` | Clients know the body is JSON |
-| Fixed JSON string | Health needs no structs yet |
-| **No** `func main` here | Server startup belongs only in `cmd/api` |
+| Set `Content-Type`          | Clients know the body is JSON              |
+| Fixed JSON string           | Health needs no structs yet                |
+| **No** `func main` here     | Server startup belongs only in `cmd/api`   |
+
 
 ### File: `cmd/api/main.go` (full file for this step)
 
@@ -242,12 +258,14 @@ func main() {
 
 **Why this block**
 
-| Line / idea | Why |
-|-------------|-----|
-| `package main` + `func main` | Required for `go run ./cmd/api` |
-| Import `internal/handler` | Uses your HealthHandler |
-| `HandleFunc("GET /health", ...)` | Go 1.22+ method+path routing |
-| Setup before `ListenAndServe` | Common beginner bug: code after Listen never runs |
+
+| Line / idea                      | Why                                               |
+| -------------------------------- | ------------------------------------------------- |
+| `package main` + `func main`     | Required for `go run ./cmd/api`                   |
+| Import `internal/handler`        | Uses your HealthHandler                           |
+| `HandleFunc("GET /health", ...)` | Go 1.22+ method+path routing                      |
+| Setup before `ListenAndServe`    | Common beginner bug: code after Listen never runs |
+
 
 **Also create stub packages so empty files do not break builds later.** Until you fill them, each must at least say:
 
@@ -304,12 +322,14 @@ type Project struct {
 
 **Why this block**
 
-| Line / idea | Why |
-|-------------|-----|
+
+| Line / idea                             | Why                                                                                   |
+| --------------------------------------- | ------------------------------------------------------------------------------------- |
 | `type Project` not `type model.Project` | You are *inside* package `model`; other packages write `model.Project` when importing |
-| JSON tags | API uses snake_case keys |
-| `omitempty` on description | Omit empty description from JSON |
-| `time.Time` | Timestamps; we will set them in UTC in the handler |
+| JSON tags                               | API uses snake_case keys                                                              |
+| `omitempty` on description              | Omit empty description from JSON                                                      |
+| `time.Time`                             | Timestamps; we will set them in UTC in the handler                                    |
+
 
 ### File: `internal/model/task.go` (full file)
 
@@ -331,10 +351,12 @@ type Task struct {
 
 **Why this block**
 
-| Line / idea | Why |
-|-------------|-----|
-| `ProjectID` | Links task to project; set from URL later, not trusted from body alone |
-| `Status` string | Simple enum for Phase 1; validate in the handler |
+
+| Line / idea     | Why                                                                    |
+| --------------- | ---------------------------------------------------------------------- |
+| `ProjectID`     | Links task to project; set from URL later, not trusted from body alone |
+| `Status` string | Simple enum for Phase 1; validate in the handler                       |
+
 
 **Check:** files save with no red errors. Still no need to run the server for models alone.
 
@@ -472,14 +494,16 @@ func (s *MemoryStore) DeleteTask(id string) bool {
 
 **Why this block**
 
-| Line / idea | Why |
-|-------------|-----|
-| `model.Project` / `model.Task` | Types live in `model`; store imports them |
-| `NewMemoryStore` + `make` | Nil maps panic on assign |
-| `sync.Mutex` + `Lock`/`Unlock` | Safe under concurrent HTTP |
-| `defer Unlock` | Unlock even if function returns early |
-| `Get*` returns `(value, bool)` | Caller maps `false` → HTTP 404 |
-| `DeleteProject` removes tasks | Avoid orphan tasks when project is deleted |
+
+| Line / idea                    | Why                                        |
+| ------------------------------ | ------------------------------------------ |
+| `model.Project` / `model.Task` | Types live in `model`; store imports them  |
+| `NewMemoryStore` + `make`      | Nil maps panic on assign                   |
+| `sync.Mutex` + `Lock`/`Unlock` | Safe under concurrent HTTP                 |
+| `defer Unlock`                 | Unlock even if function returns early      |
+| `Get`* returns `(value, bool)` | Caller maps `false` → HTTP 404             |
+| `DeleteProject` removes tasks  | Avoid orphan tasks when project is deleted |
+
 
 **Check:** file compiles conceptually; you will compile for real in Step 5 with handlers.
 
@@ -567,15 +591,17 @@ func CreateProjectHandler(mem *store.MemoryStore) http.HandlerFunc {
 
 **Why this block**
 
-| Line / idea | Why |
-|-------------|-----|
-| `writeError` | One error shape for all endpoints |
+
+| Line / idea                                                     | Why                                                                                        |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `writeError`                                                    | One error shape for all endpoints                                                          |
 | `CreateProjectHandler(mem *store.MemoryStore) http.HandlerFunc` | Returns a handler that *closes over* the store — `main` creates one store and passes it in |
-| Decode into anonymous `req` struct | Request body may not match full `Project` (no client-supplied `id`) |
-| Validate `name` | Business rule: name required → 400 |
-| `newID()` + UTC times | Server assigns identity and timestamps |
-| `201` + encode project | Matches create contract |
-| Param named `mem` | Avoids `store` colliding with package name `store` |
+| Decode into anonymous `req` struct                              | Request body may not match full `Project` (no client-supplied `id`)                        |
+| Validate `name`                                                 | Business rule: name required → 400                                                         |
+| `newID()` + UTC times                                           | Server assigns identity and timestamps                                                     |
+| `201` + encode project                                          | Matches create contract                                                                    |
+| Param named `mem`                                               | Avoids `store` colliding with package name `store`                                         |
+
 
 ### Update `cmd/api/main.go` (full file)
 
@@ -608,12 +634,14 @@ func main() {
 
 **Why this block**
 
-| Line / idea | Why |
-|-------------|-----|
-| `mem := store.NewMemoryStore()` first | One shared store for all handlers |
-| Pass `mem` into `CreateProjectHandler` | Dependency injection without a framework |
-| `PORT` env | Phase 6 deploy can change port without code edits |
-| All `HandleFunc` before Listen | Wiring complete before accepting traffic |
+
+| Line / idea                            | Why                                               |
+| -------------------------------------- | ------------------------------------------------- |
+| `mem := store.NewMemoryStore()` first  | One shared store for all handlers                 |
+| Pass `mem` into `CreateProjectHandler` | Dependency injection without a framework          |
+| `PORT` env                             | Phase 6 deploy can change port without code edits |
+| All `HandleFunc` before Listen         | Wiring complete before accepting traffic          |
+
 
 **Check**
 
@@ -637,10 +665,12 @@ Expect `201` with an `id`, then `400` for bad JSON.
 
 **Contracts**
 
-| Endpoint | Success | Errors |
-|----------|---------|--------|
-| `GET /projects` | `200` + JSON array (empty list = `[]`, not 404) | — |
-| `GET /projects/{id}` | `200` + one project | `404` if missing |
+
+| Endpoint             | Success                                         | Errors           |
+| -------------------- | ----------------------------------------------- | ---------------- |
+| `GET /projects`      | `200` + JSON array (empty list = `[]`, not 404) | —                |
+| `GET /projects/{id}` | `200` + one project                             | `404` if missing |
+
 
 ### Add to `internal/handler/project.go`
 
@@ -671,12 +701,14 @@ func GetProjectHandler(mem *store.MemoryStore) http.HandlerFunc {
 
 **Why this block**
 
-| Line / idea | Why |
-|-------------|-----|
-| No JSON decode on GET list | Nothing to parse from body |
+
+| Line / idea                | Why                                                            |
+| -------------------------- | -------------------------------------------------------------- |
+| No JSON decode on GET list | Nothing to parse from body                                     |
 | Encode slice even if empty | `[]` is correct; 404 would mean “route missing,” not “no data” |
-| `r.PathValue("id")` | Reads `{id}` from `GET /projects/{id}` |
-| `ok == false` → 404 | Store signals missing; handler maps to HTTP |
+| `r.PathValue("id")`        | Reads `{id}` from `GET /projects/{id}`                         |
+| `ok == false` → 404        | Store signals missing; handler maps to HTTP                    |
+
 
 ### Register in `main.go`
 
@@ -700,17 +732,19 @@ curl -i http://localhost:8080/projects/does-not-exist
 
 **Contracts**
 
-| Endpoint | Behavior |
-|----------|----------|
-| `GET /projects/{id}/tasks` | 404 if project missing; else `200` + task array |
+
+| Endpoint                    | Behavior                                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| `GET /projects/{id}/tasks`  | 404 if project missing; else `200` + task array                                              |
 | `POST /projects/{id}/tasks` | Body `{"title":"...","status":"todo"}`; 404 if project missing; 400 if bad input; 201 + task |
-| `GET /tasks/{id}` | 200 or 404 |
+| `GET /tasks/{id}`           | 200 or 404                                                                                   |
+
 
 Rules for create:
 
-1. Project must exist  
-2. Set `project_id` from path (never trust body for ownership)  
-3. Default status to `"todo"` if empty  
+1. Project must exist
+2. Set `project_id` from path (never trust body for ownership)
+3. Default status to `"todo"` if empty
 4. If status provided, only allow `todo`, `doing`, `done`
 
 ### File: `internal/handler/task.go` (full file)
@@ -810,12 +844,14 @@ func GetTaskHandler(mem *store.MemoryStore) http.HandlerFunc {
 
 **Why this block**
 
-| Line / idea | Why |
-|-------------|-----|
-| Check project before list/create | Nested resource: parent must exist |
+
+| Line / idea                      | Why                                                               |
+| -------------------------------- | ----------------------------------------------------------------- |
+| Check project before list/create | Nested resource: parent must exist                                |
 | `ProjectID: projectID` from path | Client cannot attach a task to someone else’s project ID via body |
-| Default + validate status | Keeps data clean |
-| Reuse `writeError` / `newID` | Same package `handler` — shared helpers |
+| Default + validate status        | Keeps data clean                                                  |
+| Reuse `writeError` / `newID`     | Same package `handler` — shared helpers                           |
+
 
 ### Register in `main.go`
 
@@ -871,12 +907,14 @@ That is the same process professionals use. Later phases only swap **store → r
 
 Use the recipe above. Store methods `UpdateProject`, `DeleteProject`, `UpdateTask`, `DeleteTask` are already in Step 4.
 
-| Endpoint | Notes |
-|----------|--------|
-| `PATCH /projects/{id}` | Update name/description; bump `updated_at`; 404 if missing |
-| `DELETE /projects/{id}` | Delete project + its tasks; `204` or `200` |
-| `PATCH /tasks/{id}` | Update title/status |
-| `DELETE /tasks/{id}` | Remove task |
+
+| Endpoint                | Notes                                                      |
+| ----------------------- | ---------------------------------------------------------- |
+| `PATCH /projects/{id}`  | Update name/description; bump `updated_at`; 404 if missing |
+| `DELETE /projects/{id}` | Delete project + its tasks; `204` or `200`                 |
+| `PATCH /tasks/{id}`     | Update title/status                                        |
+| `DELETE /tasks/{id}`    | Remove task                                                |
+
 
 Optional logging middleware (wrap a handler; register in `main`):
 
@@ -931,28 +969,30 @@ go run -race ./cmd/api
 
 Document in `README.md`:
 
-1. What Desklog is (one sentence)  
-2. Prerequisites (Go version)  
-3. How to run: `go run ./cmd/api`  
-4. Default port  
-5. List of endpoints  
-6. One example curl for create + list  
+1. What Desklog is (one sentence)
+2. Prerequisites (Go version)
+3. How to run: `go run ./cmd/api`
+4. Default port
+5. List of endpoints
+6. One example curl for create + list
 
 ---
 
 ## Common mistakes
 
-| Mistake | Why wrong | Fix |
-|---------|-----------|-----|
-| Empty `.go` file in a package | Build fails with EOF | At least `package name` |
-| `func main` inside `handler/` | Wrong package; two programs | Only `cmd/api/main.go` |
-| Code after `ListenAndServe` | Never runs | Wire store/routes above it |
-| `type model.Project struct` inside `package model` | Invalid syntax | `type Project struct` |
-| `"uuid"` import | Not a real module path | Use `newID()` or `github.com/google/uuid` |
-| Param named `store` + import `store` | Confusing / shadows | Call it `mem` |
-| Copy-paste create into list handler | List must not decode a body | Call `ListProjects` only |
-| `200` on errors | Clients cannot tell failure | Use 4xx + `writeError` |
-| Map without mutex | Data races | Always Lock around map access |
+
+| Mistake                                            | Why wrong                   | Fix                                       |
+| -------------------------------------------------- | --------------------------- | ----------------------------------------- |
+| Empty `.go` file in a package                      | Build fails with EOF        | At least `package name`                   |
+| `func main` inside `handler/`                      | Wrong package; two programs | Only `cmd/api/main.go`                    |
+| Code after `ListenAndServe`                        | Never runs                  | Wire store/routes above it                |
+| `type model.Project struct` inside `package model` | Invalid syntax              | `type Project struct`                     |
+| `"uuid"` import                                    | Not a real module path      | Use `newID()` or `github.com/google/uuid` |
+| Param named `store` + import `store`               | Confusing / shadows         | Call it `mem`                             |
+| Copy-paste create into list handler                | List must not decode a body | Call `ListProjects` only                  |
+| `200` on errors                                    | Clients cannot tell failure | Use 4xx + `writeError`                    |
+| Map without mutex                                  | Data races                  | Always Lock around map access             |
+
 
 ---
 
