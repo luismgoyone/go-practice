@@ -45,7 +45,7 @@ GET    /reports/summary?from=&to=
 ## How to use this doc
 
 1. Work phases in order — each builds on the last.
-2. **Read the [phase manual](./guides/) for your current phase** — self-contained, concept + instruction in one place.
+2. **Read the [phase manual](./guides/) for your current phase** — each has Part A (concepts) + Part B (activities), same beginner style.
 3. Keep the app runnable after every phase (`go run ./cmd/api`).
 4. Commit at the end of each phase with a clear message (e.g. `feat(phase-2): add mongodb repository`).
 5. Do not skip tests once Phase 3 introduces them; they are part of the deliverable.

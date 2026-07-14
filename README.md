@@ -59,7 +59,7 @@ GET    /reports/summary?from=&to=
 
 1. Skim [the endpoint recipe](./guides/the-endpoint-recipe.md).
 2. Open the manual for your current phase.
-3. Build in recipe order (Phase 1 has full copy-paste steps).
+3. Read Part A, then do Part B activities in order (all six phases use this format).
 4. Pass the phase exit checklist and commit.
 5. After Phase 6, take the [final quiz](./guides/final-quiz.md).
 
@@ -68,12 +68,12 @@ GET    /reports/summary?from=&to=
 | Phase | Manual | Focus |
 |-------|--------|-------|
 | — | [Endpoint recipe](./guides/the-endpoint-recipe.md) | How to start any new endpoint |
-| 1 | [HTTP & Go basics](./guides/phase-01-http-and-go-basics.md) | In-memory API (beginner steps) |
-| 2 | [MongoDB & structure](./guides/phase-02-mongodb-and-structure.md) | Persistence + layers |
-| 3 | [Auth, validation & tests](./guides/phase-03-auth-validation-tests.md) | Users, JWT, tests |
-| 4 | [Time entries & reporting](./guides/phase-04-time-entries-reporting.md) | Aggregations |
-| 5 | [Concurrency & resilience](./guides/phase-05-concurrency-resilience.md) | Workers, shutdown |
-| 6 | [Ship it](./guides/phase-06-ship-it.md) | Docker, CI, portfolio |
+| 1 | [HTTP & Go basics](./guides/phase-01-http-and-go-basics.md) | In-memory API (Part A + Part B activities) |
+| 2 | [MongoDB & structure](./guides/phase-02-mongodb-and-structure.md) | Persistence + layers (same beginner format) |
+| 3 | [Auth, validation & tests](./guides/phase-03-auth-validation-tests.md) | JWT, scoping, tests (same format) |
+| 4 | [Time entries & reporting](./guides/phase-04-time-entries-reporting.md) | Aggregations (same format) |
+| 5 | [Concurrency & resilience](./guides/phase-05-concurrency-resilience.md) | Workers, shutdown (same format) |
+| 6 | [Ship it](./guides/phase-06-ship-it.md) | Docker, CI, portfolio (same format) |
 | Capstone | [Final quiz](./guides/final-quiz.md) | Implement a new contract solo |
 
 ### Progress

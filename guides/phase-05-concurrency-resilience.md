@@ -1,77 +1,121 @@
 # Phase 5 Manual — Concurrency & Resilience
 
 **Duration:** 1 week  
-**Prerequisite:** Phase 4 complete
+**Prerequisite:** Phase 4 complete  
+**Audience:** Beginners — Part A + Part B activities
 
-Desklog's features are complete. Phase 5 makes the **process** behave well: shut down cleanly, don't hang forever, don't block HTTP while doing slow side work. This is what separates a demo from something you could actually deploy.
+**How to use**
+
+1. Read Part A (goroutines, shutdown, workers).
+2. Do Part B steps; each ends with an Activity.
+3. Prefer wiring in `main` over `go func()` inside handlers.
+4. Recipe still applies for any HTTP change ([endpoint recipe](./the-endpoint-recipe.md)).
 
 ---
 
-## 0. What changes in this phase
+# Part A — Concepts (read first)
+
+## A0. What changes
 
 | Addition | Purpose |
 |----------|---------|
-| Graceful shutdown | Finish in-flight requests before exit |
-| Request timeouts | Cancel slow operations |
-| Background worker | Async jobs (webhook on task completed) |
-| Bounded job queue | Prevent unbounded goroutines |
+| Graceful shutdown | Finish in-flight requests on Ctrl+C |
+| Request timeouts | Cancel hung DB/handlers |
+| Bounded worker pool | Background jobs without unbounded goroutines |
+| `task.completed` job | Side effect when status → `done` |
 
-**Same habit:** [The endpoint recipe](./the-endpoint-recipe.md) still applies when you touch HTTP. Most of Phase 5 is **process** work (shutdown, workers) wired in `main` — not a new folder layout.
+You already had concurrency: each HTTP request runs in its own goroutine. Phase 5 adds **your** background goroutines.
 
-| If you are… | Follow |
-|-------------|--------|
-| Adding/changing an HTTP endpoint | Full recipe (contract → … → verify) |
-| Adding graceful shutdown / timeouts | Change server construction in `cmd/api/main.go`; pass `context` through service/repo calls you already have |
-| Adding background jobs | Queue + worker types (e.g. `internal/worker` or similar); **enqueue from service** when a domain event happens (task → done); start worker in `main` |
-
-Do not sprinkle `go func()` inside handlers without a bounded queue — that skips the “wire dependencies in main” part of the recipe.
+**Rule:** if the client does not need the result in the HTTP response, consider async — after the DB write succeeds.
 
 ---
 
-## 1. Concurrency you already have
+## A1. Graceful shutdown order
 
-### Go's HTTP server is concurrent
-
-`net/http` spawns a **goroutine** per incoming request. You have been writing concurrent code since Phase 1.
-
-A **goroutine** is a lightweight thread managed by the Go runtime. Thousands can run on one machine. They share memory — which is why Phase 1 needed `sync.Mutex` on maps.
-
-### What Phase 5 adds
-
-Your **own** goroutines for work that should not block the HTTP response:
-
-- Sending a webhook after marking a task done
-- (Later) email digests, exports
-
-**Rule:** If the client does not need the result to form the HTTP response, consider doing it asynchronously.
+```
+1. HTTP Shutdown (no new requests; drain active)
+2. Cancel worker context
+3. WaitGroup.Wait (workers finish current job)
+4. Mongo Disconnect
+```
 
 ---
 
-## 2. Graceful shutdown
-
-### The problem
-
-When you deploy or press Ctrl+C, the OS sends **SIGINT** or **SIGTERM** to your process. If you exit immediately:
-
-- In-flight HTTP requests are cut off mid-response
-- Clients see connection errors
-- Database writes may be half-done
-
-### The solution
-
-1. Stop accepting new connections
-2. Wait for active requests to finish (with a deadline)
-3. Stop background workers
-4. Close database connection
-5. Exit
-
-### Implementation
+## A2. Channels and backpressure
 
 ```go
-srv := &http.Server{
-	Addr:    ":" + port,
-	Handler: mux,
+jobs := make(chan Job, 100) // buffer
+```
+
+When full, `Enqueue` should **not** block forever — return an error or drop + log.
+
+---
+
+## A3. When to enqueue `task.completed`
+
+1. Update task in Mongo (**sync**, must succeed)  
+2. Enqueue job  
+3. Return `200` to client  
+4. Worker posts webhook / logs  
+
+Never enqueue before the DB write succeeds.
+
+---
+
+# Part B — Build steps
+
+---
+
+## Step 1 — Request timeout middleware
+
+### File: `internal/handler/timeout.go` (full file)
+
+```go
+package handler
+
+import (
+	"context"
+	"net/http"
+	"time"
+)
+
+func WithTimeout(d time.Duration, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), d)
+		defer cancel()
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
+```
+
+### Activity 1.1 — Wire
+
+Use an `http.ServeMux`, wrap it:
+
+```go
+mux := http.NewServeMux()
+// register routes on mux...
+var h http.Handler = mux
+h = handler.WithTimeout(30*time.Second, h)
+// later: http.Server{Handler: h}
+```
+
+**Why:** hung Mongo calls get canceled via `r.Context()` you already pass down.
+
+### Activity 1.2
+
+Restart server; confirm normal curls still work.
+
+---
+
+## Step 2 — Graceful HTTP shutdown
+
+### Activity 2.1 — Replace bare `ListenAndServe` in `main`
+
+Pattern:
+
+```go
+srv := &http.Server{Addr: ":" + port, Handler: h}
 
 go func() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -81,91 +125,52 @@ go func() {
 
 quit := make(chan os.Signal, 1)
 signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-<-quit  // block until signal
+<-quit
 
-log.Println("shutting down...")
 ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 defer cancel()
-
 if err := srv.Shutdown(ctx); err != nil {
-	log.Fatal("shutdown:", err)
+	log.Println("shutdown:", err)
 }
-
-// disconnect mongo, stop workers — see below
-log.Println("server stopped")
+// then stop workers + mongo.Disconnect (Step 4)
 ```
 
-### What Shutdown does
+Imports: `os/signal`, `syscall`.
 
-`srv.Shutdown(ctx)`:
+### Activity 2.2 — Verify
 
-- Closes the listener (no new connections)
-- Waits for active handlers to return
-- Returns when all done OR context deadline exceeded
+Terminal 1: `go run ./cmd/api`  
+Terminal 2:
 
-`http.ErrServerClosed` from `ListenAndServe` is expected — not a real error.
-
-### Shutdown order
-
+```bash
+while true; do curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/health; sleep 0.2; done
 ```
-1. HTTP Shutdown (stop new requests, drain active)
-2. Cancel worker context (workers stop accepting new jobs)
-3. Wait for workers to finish current job (WaitGroup)
-4. mongo.Client.Disconnect
-```
+
+Ctrl+C in Terminal 1. Expect clean stop; loop shows codes then connection errors — not a hang.
+
+**Gate:** shutdown completes without force-kill.
 
 ---
 
-## 3. Request timeouts
+## Step 3 — Worker package
 
-### The problem
-
-A slow MongoDB query or bug can hang a handler forever, tying up a goroutine and possibly a connection.
-
-### context.WithTimeout
-
-Wrap the request context:
+### File: `internal/worker/worker.go` (full file skeleton)
 
 ```go
-func withTimeout(d time.Duration, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), d)
-		defer cancel()
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-```
+package worker
 
-Apply globally (e.g. 30 seconds) when registering routes.
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"os"
+	"sync"
+	"time"
+)
 
-### Propagation
-
-Repository methods already take `ctx`. When timeout fires:
-
-- `Find`, `InsertOne`, etc. return `context deadline exceeded`
-- Handler maps to 503 Service Unavailable or 500 — document your choice
-
-MongoDB driver respects context cancellation.
-
----
-
-## 4. Channels and worker pools
-
-### Channels
-
-A **channel** is a typed queue for sending data between goroutines:
-
-```go
-jobs := make(chan Job, 100)  // buffer 100 jobs
-jobs <- Job{Type: "task.completed"}  // send (blocks if buffer full)
-j := <-jobs  // receive
-```
-
-Buffered channel (`100`) lets producers enqueue without blocking until buffer fills — **backpressure**.
-
-### Worker struct
-
-```go
 type Job struct {
 	Type    string
 	Payload map[string]string
@@ -177,18 +182,14 @@ type Worker struct {
 	client *http.Client
 }
 
-func NewWorker(bufferSize int, logger *slog.Logger) *Worker {
+func New(buffer int, logger *slog.Logger) *Worker {
 	return &Worker{
-		jobs:   make(chan Job, bufferSize),
+		jobs:   make(chan Job, buffer),
 		logger: logger,
-		client: &http.Client{Timeout: 10 * time.Second},
+		client: &http.Client{Timeout: 10 * time.Second}, // mandatory
 	}
 }
-```
 
-### Enqueue
-
-```go
 func (w *Worker) Enqueue(job Job) error {
 	select {
 	case w.jobs <- job:
@@ -197,13 +198,7 @@ func (w *Worker) Enqueue(job Job) error {
 		return errors.New("job queue full")
 	}
 }
-```
 
-If queue full: log and return error to service (or drop — document behavior). Never block HTTP indefinitely.
-
-### Start workers
-
-```go
 func (w *Worker) Start(ctx context.Context, n int, wg *sync.WaitGroup) {
 	for i := 0; i < n; i++ {
 		wg.Add(1)
@@ -220,57 +215,13 @@ func (w *Worker) Start(ctx context.Context, n int, wg *sync.WaitGroup) {
 		}()
 	}
 }
-```
 
-Start 2–3 workers in `main`. Pass a `sync.WaitGroup` to wait on shutdown.
-
-### sync.WaitGroup
-
-Counts active goroutines:
-
-- `wg.Add(1)` before starting goroutine
-- `wg.Done()` when goroutine exits
-- `wg.Wait()` blocks until count is zero
-
-Use on shutdown after canceling worker context.
-
----
-
-## 5. The task.completed job
-
-### Trigger
-
-When a task is patched to `status: "done"`:
-
-1. Service updates task in MongoDB (**synchronous** — must succeed before response)
-2. Service enqueues job (**after** successful DB write)
-3. Handler returns 200 with updated task
-4. Worker processes job in background
-
-**Never enqueue before DB commit** — webhook fires, then DB fails = inconsistent state.
-
-### Job payload
-
-```go
-worker.Enqueue(Job{
-	Type: "task.completed",
-	Payload: map[string]string{
-		"task_id":    task.ID.Hex(),
-		"project_id": task.ProjectID.Hex(),
-		"user_id":    userID.Hex(),
-	},
-})
-```
-
-### Worker handle
-
-```go
 func (w *Worker) handle(job Job) {
 	switch job.Type {
 	case "task.completed":
 		w.handleTaskCompleted(job.Payload)
 	default:
-		w.logger.Warn("unknown job type", "type", job.Type)
+		w.logger.Warn("unknown job", "type", job.Type)
 	}
 }
 
@@ -280,7 +231,6 @@ func (w *Worker) handleTaskCompleted(payload map[string]string) {
 		w.logger.Info("task.completed", "payload", payload)
 		return
 	}
-
 	body, _ := json.Marshal(payload)
 	resp, err := w.client.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -292,141 +242,109 @@ func (w *Worker) handleTaskCompleted(payload map[string]string) {
 }
 ```
 
-### HTTP client timeout
+**Why client timeout:** a dead webhook must not stick a worker forever.
 
-**Mandatory.** Without `Timeout`, a dead webhook server hangs the worker goroutine forever.
+### Activity 3.1
 
-### Retries (stretch)
-
-On failure: retry 3 times with 1s, 2s, 4s sleep. Log final failure. Do not block queue on infinite retry.
-
----
-
-## 6. Persistent job queue (stretch)
-
-In-memory channel loses jobs on restart. Production systems use a **jobs collection**:
-
-```json
-{
-  "_id": "ObjectId",
-  "type": "task.completed",
-  "payload": { "task_id": "..." },
-  "status": "pending",
-  "created_at": "..."
-}
+```bash
+go build ./internal/worker/
 ```
 
-Worker polls `{ status: "pending" }` or uses change streams. Jobs survive restart.
-
-### Outbox pattern
-
-In one MongoDB **transaction**:
-
-1. Update task status to done
-2. Insert job document with status pending
-
-Guarantees: no "done" without a recorded side effect. Requires replica set for transactions.
-
 ---
 
-## 7. Caching report summary (optional)
+## Step 4 — Wire worker in `main` + shutdown
 
-### When to cache
-
-`GET /reports/summary` runs an aggregation — expensive on large datasets. Cache result keyed by `userID + from + to`.
-
-### In-memory cache
-
-```go
-type cacheEntry struct {
-	data      ReportSummary
-	expiresAt time.Time
-}
-
-type ReportCache struct {
-	mu    sync.RWMutex
-	items map[string]cacheEntry
-	ttl   time.Duration
-}
-```
-
-- `RLock` for reads (multiple readers OK)
-- `Lock` for writes
-- TTL 60 seconds — document that data may be stale
-
-Invalidate on new time entry (stretch) or accept staleness for simplicity.
-
----
-
-## 8. Wire in main
-
-Still the recipe’s **wire** step: construct worker once, inject into services, register HTTP as before, shut down in reverse order of creation.
+### Activity 4.1
 
 ```go
 workerCtx, workerCancel := context.WithCancel(context.Background())
 var workerWg sync.WaitGroup
+w := worker.New(100, slog.Default())
+w.Start(workerCtx, 3, &workerWg)
 
-worker := NewWorker(100, logger)
-worker.Start(workerCtx, 3, &workerWg)
+// pass w into TaskService constructor
 
-taskSvc := service.NewTaskService(..., worker)  // service can enqueue
-
-// on shutdown:
+// on shutdown AFTER srv.Shutdown:
 workerCancel()
 workerWg.Wait()
 _ = mongoClient.Disconnect(shutdownCtx)
-_ = srv.Shutdown(shutdownCtx)
 ```
 
-Pass worker to service via constructor — same dependency injection as repositories.
+### Activity 4.2 — Inject into task update
 
----
+When status becomes `"done"` **after** successful Mongo update:
 
-## 9. Verify shutdown
+```go
+_ = w.Enqueue(worker.Job{
+	Type: "task.completed",
+	Payload: map[string]string{
+		"task_id":    task.ID.Hex(),
+		"project_id": task.ProjectID.Hex(),
+		"user_id":    userID.Hex(),
+	},
+})
+```
 
-Terminal 1:
+If queue full: log error; still return 200 for the HTTP update (document this).
+
+### Activity 4.3
 
 ```bash
-go run ./cmd/api
+# PATCH task to done with auth
+# watch server logs for task.completed AFTER the curl returns
 ```
 
-Terminal 2 — loop requests:
+Optional: set `WEBHOOK_URL` to https://httpbin.org/post and confirm worker logs status 200.
+
+**Gate:** mark done → log line appears; Ctrl+C still drains cleanly.
+
+---
+
+## Step 5 — README + tests
+
+### Activity 5.1
+
+Document: shutdown behavior, `WEBHOOK_URL`, job fired when task → done.
+
+### Activity 5.2
 
 ```bash
-while true; do curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8080/health; done
+go test ./...
 ```
 
-Terminal 1: Ctrl+C. Loop should see clean responses until server stops — no hung connections.
+Still green.
 
-Mark task done → check logs for worker processing webhook/log **after** response returned.
+### Activity 5.3 — Stretch (optional)
 
----
-
-## 10. Common mistakes
-
-| Mistake | Consequence |
-|---------|-------------|
-| `go webhook()` per request unbounded | Memory exhaustion under load |
-| No HTTP client timeout | Worker stuck forever |
-| Enqueue before DB write | False events |
-| Exit without Shutdown | Broken client responses |
-| Ignoring full job queue | Silent job loss — log it |
+- Persistent jobs collection / outbox  
+- In-memory TTL cache for report summaries  
 
 ---
 
-## 11. Exit checklist
+## Common mistakes
 
-- [ ] SIGINT/SIGTERM triggers graceful HTTP shutdown
-- [ ] Request timeout middleware
-- [ ] Worker pool with bounded channel
-- [ ] `task.completed` job on status → done
-- [ ] Webhook client has timeout
-- [ ] README documents shutdown and job flow
-- [ ] `go test ./...` still passes
+| Mistake | Fix |
+|---------|-----|
+| `go sendWebhook()` per request | Bounded worker channel |
+| No HTTP client timeout | Set `Timeout` |
+| Enqueue before DB write | Update first |
+| Exit without `Shutdown` | Use signal + `srv.Shutdown` |
+
+---
+
+## Exit checklist
+
+- [ ] Graceful shutdown on SIGINT/SIGTERM  
+- [ ] Request timeout middleware  
+- [ ] Worker pool + bounded queue  
+- [ ] `task.completed` after status → done  
+- [ ] Webhook client has timeout  
+- [ ] README updated  
+- [ ] `go test ./...` passes  
 
 **Commit:** `feat(phase-5): graceful shutdown and background workers`
 
 ---
 
-**Next:** [Phase 6 Manual — Ship It](./phase-06-ship-it.md)  
-**Always:** [The endpoint recipe](./the-endpoint-recipe.md)
+**Always:** [The endpoint recipe](./the-endpoint-recipe.md)  
+**Next:** [Phase 6 Manual — Ship It](./phase-06-ship-it.md)

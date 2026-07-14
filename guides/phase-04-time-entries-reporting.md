@@ -1,48 +1,126 @@
 # Phase 4 Manual — Time Entries & Reporting
 
 **Duration:** 2 weeks  
-**Prerequisite:** Phase 3 complete
+**Prerequisite:** Phase 3 complete (JWT + user-scoped projects/tasks)  
+**Audience:** Beginners — Part A concepts, Part B activities (same as Phases 1–3)
 
-Projects and tasks describe *what* you might work on. **Time entries** record *what you actually did and for how long*. This phase also introduces **reporting** — read patterns that aggregate data instead of simple fetch-by-ID.
+**How to use**
+
+1. Read Part A.
+2. Do Part B steps in order; finish each Activity before the next.
+3. For every new endpoint, fill a [recipe card](./the-endpoint-recipe.md) first.
+4. All new routes stay **behind** auth middleware.
+
+Replace `github.com/<you>/go-practice` with your module path.
 
 ---
 
-## 0. What changes in this phase
+# Part A — Concepts (read first)
+
+## A0. What you add
 
 | New | Purpose |
 |-----|---------|
-| `time_entries` collection | Log minutes worked on a task |
-| Nested routes under tasks | REST design for child resources |
-| Query param filters | `?status=done` on task lists |
-| `GET /reports/summary` | Aggregated minutes per project in a date range |
+| `time_entries` collection | Log minutes on a task |
+| Nested routes | Create/list under a task |
+| `?status=` on task list | Filter |
+| `GET /reports/summary` | Minutes per project in a date range |
 
-**Same habit:** [The endpoint recipe](./the-endpoint-recipe.md). Time entries and reports are **new contracts** — walk the full recipe for each; do not only add a handler.
-
-| Recipe step | Phase 4 focus |
-|-------------|----------------|
-| Contract | Nested time-entry routes + report query params (`from`, `to`) |
-| Model | `TimeEntry` (+ optional soft-delete fields later) |
-| Data | Time-entry repo + aggregation for summary |
-| Business | Authz chain (user owns task/project); validate minutes/dates |
-| Handler | Nested paths; parse query params for report |
-| Wire | Register new routes behind auth middleware |
-| Verify | Full curl flow (login → project → task → entry → summary) + tests |
+| Recipe step | Phase 4 |
+|-------------|---------|
+| Contract | See Step 1 activities |
+| Model | `TimeEntry` |
+| Data | Time-entry repo + aggregation |
+| Business | Ownership chain + minutes/date validation |
+| Handler | Nested paths + query params |
+| Wire | Protected routes in `main` |
+| Verify | Full curl session + tests |
 
 ---
 
-## 1. Time entry domain
+## A1. Why a separate time-entry entity
 
-### Why a separate entity
+Putting one `minutes` field on a task only stores a total. Real logging needs many sessions, notes, and `logged_at` (when work happened) vs `created_at` (when the row was saved).
 
-You could add `minutes` to a task directly. That only supports one number total. Real work logging needs:
+---
 
-- Multiple entries per task ("morning: 2h", "afternoon: 1h")
-- Notes per session
-- `logged_at` different from `created_at` (backfilling yesterday's work)
+## A2. URL design
 
-### Document structure
+**Nested (create/list):**
+
+```
+POST /tasks/{task_id}/time-entries
+GET  /tasks/{task_id}/time-entries
+```
+
+**Flat (delete):**
+
+```
+DELETE /time-entries/{id}
+```
+
+`task_id` comes from the **path**, never from the body (prevents logging time on someone else’s task).
+
+---
+
+## A3. Authz chain for time entries
+
+```
+user from JWT → load task → load project → project.UserID must match → then create/list/delete
+```
+
+Otherwise → `404`.
+
+---
+
+## A4. Aggregation (reports)
+
+Do **not** load all entries into Go and sum. Use a MongoDB aggregation pipeline: `$match` → `$lookup` tasks → `$group` by project → optional project name lookup.
+
+Put the pipeline in the **repository**. Handler only parses `from`/`to` and returns JSON.
+
+Timestamps: RFC3339 UTC (`2026-07-10T14:30:00Z`).
+
+---
+
+# Part B — Build steps
+
+---
+
+## Step 1 — Write the contracts (Activity)
+
+### Activity 1.1 — Fill recipe cards for:
+
+1. `POST /tasks/{task_id}/time-entries`  
+   Body: `{"minutes":45,"note":"...","logged_at":"..."}` (`logged_at` optional)  
+   Success: `201` + entry  
+   Errors: `400` validation, `401`, `404` task/project  
+
+2. `GET /tasks/{task_id}/time-entries` → `200` + array  
+
+3. `DELETE /time-entries/{id}` → `204`  
+
+4. `GET /reports/summary?from=&to=` → `200` + summary object  
+
+5. Stretch/filter: `GET /projects/{id}/tasks?status=done`
+
+**Check:** You can explain each without looking at code. Then continue.
+
+---
+
+## Step 2 — Model + indexes
+
+### File: `internal/model/time_entry.go` (full file)
 
 ```go
+package model
+
+import (
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
 type TimeEntry struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	TaskID    primitive.ObjectID `bson:"task_id" json:"task_id"`
@@ -54,395 +132,216 @@ type TimeEntry struct {
 }
 ```
 
-### Field decisions explained
+**Why `user_id` on the entry:** faster auth checks and report `$match` without joining every time.
 
-| Field | Why |
-|-------|-----|
-| `task_id` | Which task this time belongs to |
-| `user_id` | Denormalized — speeds authorization and reports without extra joins in every check |
-| `minutes` | Integer minutes (simpler than fractional hours for v1) |
-| `logged_at` | When work happened |
-| `created_at` | When record was created in the system |
+### Activity 2.1 — Indexes
 
-### Validation rules
-
-| Field | Rule |
-|-------|------|
-| minutes | integer > 0, max 1440 (24 hours) per entry |
-| note | optional, max 500 characters |
-| logged_at | valid timestamp; default `time.Now().UTC()` if omitted |
-
----
-
-## 2. Nested resources — URL design
-
-### Parent-child in URLs
-
-Time entries belong to tasks. Two valid styles:
-
-**Nested (Desklog uses this for create/list):**
-
-```
-GET  /tasks/{task_id}/time-entries
-POST /tasks/{task_id}/time-entries
-```
-
-**Flat (Desklog uses this for delete by entry ID):**
-
-```
-DELETE /time-entries/{id}
-```
-
-**Why mix styles:** Creating requires knowing the parent task (nested). Deleting by entry ID only needs the entry's global ID — flat is simpler.
-
-### Path vs body
-
-`task_id` comes from the **URL path** on POST, not the body. If you allowed `task_id` in the body, a client could log time against someone else's task while authenticated as themselves.
-
-POST body:
-
-```json
-{
-  "minutes": 45,
-  "note": "Implemented repository",
-  "logged_at": "2026-07-10T14:30:00Z"
-}
-```
-
----
-
-## 3. Authorization for time entries
-
-### Create entry — check chain
-
-```
-1. Get userID from context (JWT)
-2. Parse task_id from path
-3. Load task by ID
-4. Load project for task.ProjectID
-5. If project.UserID != userID → 404 (or 403)
-6. Insert entry with task_id, user_id, minutes, logged_at
-```
-
-### List entries for task
-
-Same ownership check before returning entries. Filter:
-
-```go
-bson.M{"task_id": taskID, "user_id": userID}
-```
-
-### Delete entry
-
-Load entry → verify `entry.UserID == currentUser` → delete. Or 404 if not found/not owned.
-
----
-
-## 4. Query parameters — filtering tasks
-
-### Path vs query
-
-- **Path parameter** identifies a resource: `/projects/{id}`
-- **Query parameter** filters or modifies the response: `/projects/{id}/tasks?status=done`
-
-### Implementation
-
-Handler reads query:
-
-```go
-status := r.URL.Query().Get("status")
-```
-
-Service/repository:
-
-```go
-filter := bson.M{"project_id": projectID, "user_id": userID}
-if status != "" {
-	if !isValidStatus(status) {
-		return nil, &ValidationError{Field: "status", Message: "invalid"}
-	}
-	filter["status"] = status
-}
-```
-
-Empty `status` → return all tasks. Invalid status → 400, not silent ignore.
-
----
-
-## 5. Time and date ranges
-
-### RFC3339
-
-API timestamps use **RFC3339** format — ISO 8601 subset:
-
-```
-2026-07-10T14:30:00Z
-```
-
-`Z` means UTC. Always store and compare in UTC internally.
-
-### Parsing in Go
-
-```go
-t, err := time.Parse(time.RFC3339, s)
-if err != nil {
-	return time.Time{}, &ValidationError{Field: "logged_at", Message: "must be RFC3339"}
-}
-```
-
-### Report query params
-
-```
-GET /reports/summary?from=2026-07-01T00:00:00Z&to=2026-07-31T23:59:59Z
-```
-
-Validation:
-
-- Both `from` and `to` required
-- Both must parse as RFC3339
-- `from` must be ≤ `to`
-- Else → 400
-
-Document in README: **all API times are UTC**.
-
----
-
-## 6. MongoDB aggregation — how reporting works
-
-### Why not loop in Go
-
-Loading all time entries into Go and summing works for 100 rows. At scale it wastes memory and network. **Aggregation** runs the computation on the database server.
-
-An **aggregation pipeline** is a sequence of stages. Each stage transforms documents and passes results to the next.
-
-### Pipeline for summary report
-
-**Goal:** Total minutes per project for one user in a date range.
-
-**Stage 1 — `$match`:** Filter entries early (reduces work for later stages)
-
-```javascript
-{ $match: {
-    user_id: ObjectId("..."),
-    logged_at: { $gte: ISODate("2026-07-01"), $lte: ISODate("2026-07-31") }
-}}
-```
-
-**Stage 2 — `$lookup`:** Join tasks collection (like a left join)
-
-```javascript
-{ $lookup: {
-    from: "tasks",
-    localField: "task_id",
-    foreignField: "_id",
-    as: "task"
-}}
-```
-
-**Stage 3 — `$unwind`:** One document per task (lookup returns array)
-
-```javascript
-{ $unwind: "$task" }
-```
-
-**Stage 4 — `$group`:** Sum minutes by project_id
-
-```javascript
-{ $group: {
-    _id: "$task.project_id",
-    total_minutes: { $sum: "$minutes" }
-}}
-```
-
-**Stage 5 — `$lookup` (optional):** Join projects for names
-
-```javascript
-{ $lookup: {
-    from: "projects",
-    localField: "_id",
-    foreignField: "_id",
-    as: "project"
-}}
-{ $unwind: "$project" }
-```
-
-### In Go
-
-```go
-pipeline := mongo.Pipeline{
-	{{Key: "$match", Value: bson.D{...}}},
-	{{Key: "$lookup", Value: bson.D{...}}},
-	{{Key: "$unwind", Value: "$task"}},
-	{{Key: "$group", Value: bson.D{
-		{Key: "_id", Value: "$task.project_id"},
-		{Key: "total_minutes", Value: bson.D{{Key: "$sum", Value: "$minutes"}}},
-	}}},
-}
-
-cursor, err := r.col.Aggregate(ctx, pipeline)
-```
-
-Put pipeline in `repository/report.go` — handler calls service, service calls report repository.
-
-### Response shape
-
-```json
-{
-  "from": "2026-07-01T00:00:00Z",
-  "to": "2026-07-31T23:59:59Z",
-  "projects": [
-    {
-      "project_id": "507f1f77bcf86cd799439011",
-      "name": "go-practice",
-      "total_minutes": 320
-    }
-  ]
-}
-```
-
-Empty range with no entries: `200` + `"projects": []`
-
----
-
-## 7. Indexes for time entries
+Append to `scripts/indexes.js`:
 
 ```javascript
 db.time_entries.createIndex({ task_id: 1, logged_at: -1 });
 db.time_entries.createIndex({ user_id: 1, logged_at: -1 });
 ```
 
-| Index | Supports |
-|-------|----------|
-| `task_id + logged_at` | List entries for a task, sorted recent first |
-| `user_id + logged_at` | Report `$match` on user + date range |
-
-`-1` = descending (newest first).
-
----
-
-## 8. Repository methods to add
-
-| Method | Operation |
-|--------|-----------|
-| `Create(ctx, entry)` | InsertOne |
-| `ListByTask(ctx, taskID, userID)` | Find with filter |
-| `Delete(ctx, id, userID)` | DeleteOne with user scope |
-| `SummaryByProject(ctx, userID, from, to)` | Aggregate pipeline |
-
----
-
-## 9. API documentation in README
-
-Add a section listing every endpoint:
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | /tasks/{id}/time-entries | Yes | Log time |
-| GET | /reports/summary | Yes | Minutes per project |
-
-Include full curl example flow:
-
-1. Register
-2. Login → save token
-3. Create project
-4. Create task
-5. Log time entry
-6. Fetch summary
-
-Someone cloning your repo should complete this flow using only the README.
-
----
-
-## 10. Stretch: soft delete
-
-Add optional field to tasks:
-
-```go
-DeletedAt *time.Time `bson:"deleted_at,omitempty" json:"deleted_at,omitempty"`
+```bash
+docker exec -i desklog-mongo mongosh < scripts/indexes.js
 ```
 
-On delete: set `deleted_at` instead of removing document. All queries add:
-
-```go
-filter["deleted_at"] = bson.M{"$exists": false}
-```
-
-Reports should exclude time on soft-deleted tasks (filter in aggregation or service).
-
 ---
 
-## 11. Build order (recipe order)
+## Step 3 — Time entry repository
 
-For **each** new endpoint (`POST .../time-entries`, `GET .../time-entries`, `DELETE /time-entries/{id}`, `GET /reports/summary`), fill the recipe card first, then:
+### File: `internal/repository/time_entry.go`
 
-| Step | Recipe | What to build |
-|------|--------|---------------|
-| 1 | Model | `TimeEntry` + indexes |
-| 2 | Data | Time entry repository methods |
-| 3 | Business | Service with authorization chain |
-| 4 | Handler + wire | List / create / delete — curl each before the next |
-| 5 | Handler | Task list `?status=` filter |
-| 6 | Data + business | Report aggregation in repo + date validation in service |
-| 7 | Handler + wire | Report handler |
-| 8 | Verify | Tests: bad date range, wrong user's task, empty report |
-| 9 | Docs | README API table + curl walkthrough |
+Implement:
 
----
+| Method | Behavior |
+|--------|----------|
+| `Create(ctx, entry)` | InsertOne; set ID + CreatedAt |
+| `ListByTask(ctx, taskID, userID)` | Find `{task_id, user_id}` |
+| `Delete(ctx, id, userID)` | DeleteOne `{_id, user_id}`; `ErrNotFound` if 0 |
+| `SummaryByProject(ctx, userID, from, to)` | Aggregate (Step 6) — stub returning empty for now is OK |
 
-## 12. Verify
+### Activity 3.1
 
 ```bash
-TOKEN="..."  # from login
-TASK_ID="..."
+go build ./internal/repository/
+```
 
-# Log time
-curl -s -X POST "http://localhost:8080/tasks/$TASK_ID/time-entries" \
+---
+
+## Step 4 — Time entry service (ownership chain)
+
+### File: `internal/service/time_entry.go`
+
+Core create flow:
+
+```go
+func (s *TimeEntryService) Create(ctx context.Context, userID, taskID primitive.ObjectID, minutes int, note string, loggedAt *time.Time) (model.TimeEntry, error) {
+	// 1. load task (ErrNotFound → return)
+	// 2. load project for task.ProjectID
+	// 3. if project.UserID != userID → return repository.ErrNotFound
+	// 4. validate minutes: > 0 and <= 1440
+	// 5. note max 500 chars
+	// 6. loggedAt default Now().UTC()
+	// 7. repo.Create with TaskID, UserID set from args (not client trust)
+}
+```
+
+Same ownership check for ListByTask. Delete uses `{id, userID}`.
+
+### Activity 4.1
+
+```bash
+go build ./internal/service/
+```
+
+---
+
+## Step 5 — Handlers + wire create/list/delete
+
+### File: `internal/handler/time_entry.go`
+
+- Parse `task_id` / entry `id` with `ObjectIDFromHex` → `400` if bad  
+- `UserIDFromContext` → `401` if missing  
+- Map validation → `400`, not found → `404`  
+- Register with `Protect(authSvc, ...)`
+
+### Activity 5.1 — Wire in `main`
+
+```go
+http.HandleFunc("POST /tasks/{id}/time-entries", handler.Protect(authSvc, handler.CreateTimeEntryHandler(timeSvc)))
+http.HandleFunc("GET /tasks/{id}/time-entries", handler.Protect(authSvc, handler.ListTimeEntriesHandler(timeSvc)))
+http.HandleFunc("DELETE /time-entries/{id}", handler.Protect(authSvc, handler.DeleteTimeEntryHandler(timeSvc)))
+```
+
+### Activity 5.2 — Curl (login first)
+
+```bash
+TOKEN=...
+TASK_ID=...
+
+curl -i -X POST "http://localhost:8080/tasks/$TASK_ID/time-entries" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"minutes":60,"note":"Phase 4 work"}'
+  -d '{"minutes":60,"note":"Phase 4"}'
 
-# List entries
 curl -s "http://localhost:8080/tasks/$TASK_ID/time-entries" \
-  -H "Authorization: Bearer $TOKEN"
-
-# Summary
-curl -s "http://localhost:8080/reports/summary?from=2026-07-01T00:00:00Z&to=2026-07-31T23:59:59Z" \
-  -H "Authorization: Bearer $TOKEN"
-
-# Invalid range
-curl -i "http://localhost:8080/reports/summary?from=2026-08-01T00:00:00Z&to=2026-07-01T00:00:00Z" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Manually verify totals: add entries with known minutes, confirm summary sums match.
+**Gate:** create + list work for your user; other user’s task id → 404.
 
 ---
 
-## 13. Common mistakes
+## Step 6 — Summary report (aggregation)
 
-| Mistake | Problem |
-|---------|---------|
-| Summing in handler with FindAll | Does not scale; wrong layer |
-| `$lookup` before `$match` | Processes more data than needed |
-| Accepting `task_id` in POST body | Authorization bypass |
-| Local time without docs | Bugs across timezones |
-| Negative/zero minutes | Corrupts reports |
+### Activity 6.1 — Implement `SummaryByProject` in repository
+
+Pipeline idea:
+
+1. `$match` — `user_id` + `logged_at` between `from` and `to`  
+2. `$lookup` — tasks on `task_id`  
+3. `$unwind` — `$task`  
+4. `$group` — `_id: $task.project_id`, `total_minutes: {$sum: $minutes}`  
+5. Optional `$lookup` projects for names  
+
+### Response shape (handler/service)
+
+```json
+{
+  "from": "2026-07-01T00:00:00Z",
+  "to": "2026-07-31T23:59:59Z",
+  "projects": [
+    {"project_id": "...", "name": "go-practice", "total_minutes": 320}
+  ]
+}
+```
+
+Empty → `200` + `"projects": []`.
+
+### Activity 6.2 — Validate query params in service/handler
+
+- Both `from` and `to` required  
+- Parse with `time.Parse(time.RFC3339, ...)`  
+- `from <= to` or `400`
+
+### Activity 6.3 — Wire + curl
+
+```bash
+curl -i "http://localhost:8080/reports/summary?from=2026-07-01T00:00:00Z&to=2026-07-31T23:59:59Z" \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -i "http://localhost:8080/reports/summary?from=2026-08-01T00:00:00Z&to=2026-07-01T00:00:00Z" \
+  -H "Authorization: Bearer $TOKEN"
+# expect 400
+```
+
+**Gate:** totals match minutes you inserted manually.
 
 ---
 
-## 14. Exit checklist
+## Step 7 — Task list `?status=` filter
 
-- [ ] Time entry CRUD with auth
-- [ ] Task list filter by `?status=`
-- [ ] Summary report via aggregation
-- [ ] Date range validation
-- [ ] Indexes on time_entries
-- [ ] README API reference with full curl flow
-- [ ] Tests for auth and validation edge cases
+### Activity 7.1
+
+In list-tasks handler: `status := r.URL.Query().Get("status")`.  
+If non-empty, validate `todo|doing|done`; else `400`.  
+Pass into service/repo filter `{project_id, user scoping, status?}`.
+
+```bash
+curl -s "http://localhost:8080/projects/$PID/tasks?status=done" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## Step 8 — Tests + README
+
+### Activity 8.1 — Tests (minimum)
+
+- Invalid date range → validation error / 400  
+- Wrong user’s task → 404 on create entry  
+- Empty report range → `projects: []`
+
+```bash
+go test ./...
+```
+
+### Activity 8.2 — README
+
+Table of new endpoints + copy-paste curl: register → login → project → task → time entry → summary.
+
+### Activity 8.3 — Stretch (optional)
+
+Soft-delete tasks with `deleted_at`; exclude from lists/reports.
+
+---
+
+## Common mistakes
+
+| Mistake | Fix |
+|---------|-----|
+| Summing in Go with FindAll | Aggregation in repository |
+| `task_id` in POST body | Path only |
+| Local timezone without docs | UTC + RFC3339 |
+| Minutes ≤ 0 | Reject with 400 |
+
+---
+
+## Exit checklist
+
+- [ ] Time entry create/list/delete with auth  
+- [ ] `?status=` filter on tasks  
+- [ ] Summary via aggregation  
+- [ ] Date validation  
+- [ ] Indexes  
+- [ ] README walkthrough  
+- [ ] Tests for auth/validation edges  
 
 **Commit:** `feat(phase-4): time entries and summary report`
 
 ---
 
-**Next:** [Phase 5 Manual — Concurrency & Resilience](./phase-05-concurrency-resilience.md)  
-**Always:** [The endpoint recipe](./the-endpoint-recipe.md)
+**Always:** [The endpoint recipe](./the-endpoint-recipe.md)  
+**Next:** [Phase 5 Manual — Concurrency & Resilience](./phase-05-concurrency-resilience.md)

@@ -1,106 +1,123 @@
 # Phase 3 Manual — Auth, Validation & Tests
 
 **Duration:** 2–3 weeks  
-**Prerequisite:** Phase 2 complete
+**Prerequisite:** Phase 2 complete (Mongo + layers working)  
+**You need:** MongoDB running, `curl`, optionally `jq`  
+**Audience:** Beginners — same style as Phases 1–2
 
-Desklog until now has no concept of "who" is calling the API. Anyone can read and write all projects. Phase 3 adds **users**, **authentication** (proving identity), **authorization** (proving permission), **input validation**, **structured logging**, and **automated tests**.
+**How to use this document**
+
+1. Read **Part A** so auth words make sense.
+2. Follow **Part B** steps in order. Each step has files + **why** + an **Activity**.
+3. Keep [The endpoint recipe](./the-endpoint-recipe.md) open. Auth adds middleware and `user_id` scoping — it does not replace the recipe.
+4. Prove register/login **before** protecting every route.
+
+Replace `github.com/<you>/go-practice` with your module path.
 
 ---
 
-## 0. What changes in this phase
+# Part A — Concepts (read first)
+
+## A0. What changes
 
 | Before | After |
 |--------|-------|
-| Open API | Login required for data endpoints |
-| All projects visible | Each user sees only their projects |
-| Ad-hoc validation | Consistent validation errors |
-| `log.Printf` | Structured JSON logs |
-| No tests | `go test ./...` passes |
+| Anyone can call data APIs | JWT required on projects/tasks |
+| All users see all projects | Each user sees only theirs |
+| `log.Printf` | Structured `slog` JSON logs |
+| No automated tests | `go test ./...` passes |
 
-**Same habit:** [The endpoint recipe](./the-endpoint-recipe.md). Auth adds middleware and scoping; it does not replace the recipe.
-
-| Recipe step | What changes in Phase 3 |
-|-------------|-------------------------|
-| Contract | New: `POST /auth/register`, `POST /auth/login`; data routes require `Authorization: Bearer …` |
-| Model | `User`; projects/tasks gain `user_id` |
-| Data | User repository; all project/task queries filter by `user_id` |
-| Business | Hash passwords, issue/validate JWT, ownership checks in service |
-| Handler | Auth handlers; data handlers read `user_id` from context (never from body) |
-| Wire | Auth middleware wraps protected routes in `main` |
+| Recipe step | Phase 3 |
+|-------------|---------|
+| Contract | `POST /auth/register`, `POST /auth/login`; data routes need `Authorization: Bearer …` |
+| Model | `User`; projects (and ownership path for tasks) gain `user_id` |
+| Data | User repository; project/task queries filter by owner |
+| Business | bcrypt, JWT issue/validate, ownership checks |
+| Handler | Auth handlers; read `user_id` from **context**, never body |
+| Wire | Auth middleware wraps protected routes |
 | Verify | curl with token **and** `go test ./...` |
 
-For a **new protected endpoint**: contract → model/repo/service as needed → handler → register **behind** auth middleware → curl with Bearer token → add a test if it encodes a security rule.
+---
+
+## A1. Authn vs authz
+
+- **Authentication** — who are you? (login → JWT)
+- **Authorization** — are you allowed? (does this project belong to you?)
+
+```
+register → login → Bearer token → middleware validates → user_id in context → service scopes queries
+```
+
+**Critical rule:** `user_id` comes from the token/context only. Ignore any `user_id` in JSON bodies.
 
 ---
 
-## 1. Authentication vs authorization
+## A2. Passwords and JWT (one page)
 
-### Authentication (authn) — "Who are you?"
-
-The client proves identity, usually by:
-
-- Sending a **token** (JWT in `Authorization` header) obtained from login
-- Or sending a **session cookie** from a previous login
-
-Desklog uses **JWT Bearer tokens** — common for APIs, no session store required in Phase 3.
-
-### Authorization (authz) — "Are you allowed?"
-
-After identity is known, every data operation checks:
-
-- Does this **project** belong to the current user?
-- Does this **task** belong to a project owned by the current user?
-
-**Critical rule:** `user_id` comes from the **token**, never from the request body. A client sending `{"user_id": "someone-else"}` must be ignored.
-
-### Flow overview
-
-```
-1. POST /auth/register  → create user (hashed password)
-2. POST /auth/login     → verify password → return JWT
-3. Client sends: Authorization: Bearer <jwt>
-4. Middleware validates JWT → extracts user_id → puts in context
-5. Handler/service uses user_id from context for all queries
-```
+- Store **bcrypt hashes**, never plaintext (`json:"-"` on `PasswordHash`).
+- Login: same error for “unknown email” and “wrong password” → `401` `invalid credentials` (stops email enumeration).
+- JWT: signed string; claims include `sub` (user id) + `exp`.
+- `JWT_SECRET` from env only; refuse to start if missing.
 
 ---
 
-## 2. Password storage
+## A3. Middleware
 
-### Never store plaintext passwords
+Middleware runs **before** the handler: check `Authorization: Bearer <token>`, validate JWT, put `userID` on `context`, call next.
 
-If your database leaks, plaintext passwords compromise users everywhere they reuse passwords. Store only a **hash** — a one-way transformation.
+**Public:** `/health`, `/auth/register`, `/auth/login`  
+**Protected:** all project and task routes
 
-### bcrypt
+---
 
-**bcrypt** is a password hashing algorithm designed to be slow (resistant to brute force).
+## A4. Scoping = multi-tenant filter
+
+Every project query includes `user_id` of the current user.  
+Missing **or** someone else’s ID → same `404` (do not leak that the resource exists).
+
+Tasks: load task → load its project → project must belong to current user.
+
+---
+
+# Part B — Build steps
+
+---
+
+## Step 1 — Dependencies and env
+
+### Activity 1.1 — Install packages
 
 ```bash
 go get golang.org/x/crypto/bcrypt
+go get github.com/golang-jwt/jwt/v5
+go get github.com/google/uuid
+go mod tidy
 ```
 
-**Register — hash before insert:**
+### Activity 1.2 — Env
 
-```go
-hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-// store string(hash) in user.PasswordHash
+```bash
+export JWT_SECRET="$(openssl rand -hex 32)"
+# keep MONGODB_URI / MONGODB_DATABASE from Phase 2
 ```
 
-`DefaultCost` is 10 — higher = slower = more secure but more CPU.
+**Check:** `echo $JWT_SECRET` is non-empty. App will also require this at startup later.
 
-**Login — compare:**
+---
 
-```go
-err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
-if err != nil {
-	// wrong password — same response as user not found
-	return ErrInvalidCredentials
-}
-```
+## Step 2 — User model + unique email index
 
-### User model
+### File: `internal/model/user.go` (full file)
 
 ```go
+package model
+
+import (
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
 type User struct {
 	ID           primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	Email        string             `bson:"email" json:"email"`
@@ -109,127 +126,341 @@ type User struct {
 }
 ```
 
-`json:"-"` means this field is **never** included in JSON output — even if you accidentally try to encode the full struct.
+**Why:** `json:"-"` ensures the hash never appears in API responses.
 
-### Login error messages
+### Activity 2.1 — Index
 
-Return the same error for "email not found" and "wrong password":
-
-```json
-{"error": "invalid credentials"}
-```
-
-Different messages let attackers discover which emails are registered (**user enumeration**).
-
-### Unique email index
+Add to `scripts/indexes.js` (or run once in mongosh):
 
 ```javascript
+db = db.getSiblingDB('desklog');
 db.users.createIndex({ email: 1 }, { unique: true });
 ```
 
-Duplicate registration → MongoDB error 11000 → HTTP **409 Conflict**.
+```bash
+docker exec -i desklog-mongo mongosh < scripts/indexes.js
+```
+
+**Why unique:** one account per email; duplicates → Mongo error `11000` → HTTP `409`.
 
 ---
 
-## 3. JWT (JSON Web Token)
+## Step 3 — User repository
 
-### What a JWT is
+### File: `internal/repository/user.go` (full file)
 
-A JWT is a signed string with three parts (header.payload.signature), dot-separated.
+```go
+package repository
 
-The **payload** contains **claims** — key/value pairs:
+import (
+	"context"
+	"errors"
+	"time"
 
-```json
-{
-  "sub": "507f1f77bcf86cd799439011",
-  "exp": 1720000000
+	"github.com/<you>/go-practice/internal/model"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+)
+
+type UserRepo struct {
+	col *mongo.Collection
+}
+
+func NewUserRepo(db *mongo.Database) *UserRepo {
+	return &UserRepo{col: db.Collection("users")}
+}
+
+func (r *UserRepo) Create(ctx context.Context, u model.User) (model.User, error) {
+	u.ID = primitive.NewObjectID()
+	u.CreatedAt = time.Now().UTC()
+	_, err := r.col.InsertOne(ctx, u)
+	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return model.User{}, ErrDuplicate
+		}
+		return model.User{}, err
+	}
+	return u, nil
+}
+
+func (r *UserRepo) GetByEmail(ctx context.Context, email string) (model.User, error) {
+	var u model.User
+	err := r.col.FindOne(ctx, bson.M{"email": email}).Decode(&u)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return model.User{}, ErrNotFound
+		}
+		return model.User{}, err
+	}
+	return u, nil
 }
 ```
 
-- `sub` — subject (user ID)
-- `exp` — expiration (Unix timestamp)
+### File: `internal/repository/errors.go` — add
 
-The server **signs** the token with a secret. Clients cannot forge tokens without the secret.
+```go
+var ErrDuplicate = errors.New("duplicate")
+```
 
-### Install
+(Keep existing `ErrNotFound`.)
+
+### Activity 3.1
 
 ```bash
-go get github.com/golang-jwt/jwt/v5
+go build ./internal/repository/
 ```
-
-### Issue token on login
-
-```go
-secret := []byte(os.Getenv("JWT_SECRET"))
-
-token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-	"sub": user.ID.Hex(),
-	"exp": time.Now().Add(24 * time.Hour).Unix(),
-	"iat": time.Now().Unix(),
-})
-
-signed, err := token.SignedString(secret)
-```
-
-Return:
-
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIs...",
-  "expires_at": "2026-07-11T12:00:00Z"
-}
-```
-
-### Validate token in middleware
-
-```go
-token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-	if t.Method != jwt.SigningMethodHS256 {
-		return nil, fmt.Errorf("unexpected method")
-	}
-	return secret, nil
-})
-if err != nil || !token.Valid {
-	// 401
-}
-
-claims, ok := token.Claims.(jwt.MapClaims)
-sub, _ := claims["sub"].(string)
-userID, err := primitive.ObjectIDFromHex(sub)
-```
-
-### JWT_SECRET
-
-- Long random string (32+ bytes)
-- From environment only: `JWT_SECRET=...`
-- Never commit to git
-- App refuses to start if missing
-
-### JWT limitations (know this)
-
-- **Hard to revoke** before expiry — acceptable for learning
-- **Do not put sensitive data** in payload (it's base64, not encrypted)
-- Phase 3 stretch: denylist collection for logout
 
 ---
 
-## 4. Auth middleware
+## Step 4 — Auth service (register + login, no middleware yet)
 
-### What middleware does
-
-Runs **before** your handler on every protected request:
-
-1. Read `Authorization` header
-2. Expect format: `Bearer <token>`
-3. Validate JWT
-4. Put `userID` in request context
-5. Call next handler
+### File: `internal/service/auth.go` (full file)
 
 ```go
+package service
+
+import (
+	"context"
+	"errors"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/<you>/go-practice/internal/model"
+	"github.com/<you>/go-practice/internal/repository"
+
+	"github.com/golang-jwt/jwt/v5"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"golang.org/x/crypto/bcrypt"
+)
+
+var ErrInvalidCredentials = errors.New("invalid credentials")
+
+type AuthService struct {
+	users  *repository.UserRepo
+	secret []byte
+}
+
+func NewAuthService(users *repository.UserRepo, secret []byte) *AuthService {
+	return &AuthService{users: users, secret: secret}
+}
+
+func (s *AuthService) Register(ctx context.Context, email, password string) (model.User, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if !strings.Contains(email, "@") || len(email) < 3 || len(email) > 254 {
+		return model.User{}, &ValidationError{Message: "invalid email"}
+	}
+	if len(password) < 8 {
+		return model.User{}, &ValidationError{Message: "password must be at least 8 characters"}
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return model.User{}, err
+	}
+	return s.users.Create(ctx, model.User{
+		Email:        email,
+		PasswordHash: string(hash),
+	})
+}
+
+type LoginResult struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func (s *AuthService) Login(ctx context.Context, email, password string) (LoginResult, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	user, err := s.users.GetByEmail(ctx, email)
+	if err != nil {
+		return LoginResult{}, ErrInvalidCredentials // same message whether missing or wrong
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
+		return LoginResult{}, ErrInvalidCredentials
+	}
+	exp := time.Now().UTC().Add(24 * time.Hour)
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub": user.ID.Hex(),
+		"exp": exp.Unix(),
+		"iat": time.Now().UTC().Unix(),
+	})
+	signed, err := tok.SignedString(s.secret)
+	if err != nil {
+		return LoginResult{}, err
+	}
+	return LoginResult{Token: signed, ExpiresAt: exp}, nil
+}
+
+func (s *AuthService) ParseUserID(tokenStr string) (primitive.ObjectID, error) {
+	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+		if t.Method != jwt.SigningMethodHS256 {
+			return nil, errors.New("unexpected signing method")
+		}
+		return s.secret, nil
+	})
+	if err != nil || !token.Valid {
+		return primitive.NilObjectID, ErrInvalidCredentials
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return primitive.NilObjectID, ErrInvalidCredentials
+	}
+	sub, _ := claims["sub"].(string)
+	id, err := primitive.ObjectIDFromHex(sub)
+	if err != nil {
+		return primitive.NilObjectID, ErrInvalidCredentials
+	}
+	return id, nil
+}
+
+// Optional helper used at startup
+func MustJWTSecret() []byte {
+	s := os.Getenv("JWT_SECRET")
+	if s == "" {
+		panic("JWT_SECRET must be set")
+	}
+	return []byte(s)
+}
+```
+
+**Why:** hash on register; same login error always; JWT `sub` = user id hex.
+
+### Activity 4.1
+
+```bash
+go build ./internal/service/
+```
+
+---
+
+## Step 5 — Auth handlers + public routes
+
+### File: `internal/handler/auth.go` (full file)
+
+```go
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+
+	"github.com/<you>/go-practice/internal/repository"
+	"github.com/<you>/go-practice/internal/service"
+)
+
+func RegisterHandler(svc *service.AuthService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		defer r.Body.Close()
+
+		user, err := svc.Register(r.Context(), req.Email, req.Password)
+		var ve *service.ValidationError
+		if errors.As(err, &ve) {
+			writeError(w, http.StatusBadRequest, ve.Message)
+			return
+		}
+		if errors.Is(err, repository.ErrDuplicate) {
+			writeError(w, http.StatusConflict, "email already registered")
+			return
+		}
+		if err != nil {
+			log.Println(err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(user)
+	}
+}
+
+func LoginHandler(svc *service.AuthService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		defer r.Body.Close()
+
+		res, err := svc.Login(r.Context(), req.Email, req.Password)
+		if errors.Is(err, service.ErrInvalidCredentials) {
+			writeError(w, http.StatusUnauthorized, "invalid credentials")
+			return
+		}
+		if err != nil {
+			log.Println(err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(res)
+	}
+}
+```
+
+### Activity 5.1 — Wire public auth routes in `main`
+
+Construct `AuthService`, register:
+
+```go
+http.HandleFunc("POST /auth/register", handler.RegisterHandler(authSvc))
+http.HandleFunc("POST /auth/login", handler.LoginHandler(authSvc))
+```
+
+Keep existing project/task routes working for now (still open).
+
+### Activity 5.2 — Curl register + login
+
+```bash
+curl -i -X POST http://localhost:8080/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"securepass123"}'
+
+curl -i -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"securepass123"}'
+```
+
+Expect `201` then `200` with `token`. **Gate:** do not continue until this works.
+
+---
+
+## Step 6 — Auth middleware
+
+### File: `internal/handler/auth_middleware.go` (full file)
+
+```go
+package handler
+
+import (
+	"context"
+	"net/http"
+	"strings"
+
+	"github.com/<you>/go-practice/internal/service"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
 type contextKey string
+
 const userIDKey contextKey = "userID"
 
-func AuthMiddleware(secret []byte, next http.Handler) http.Handler {
+func AuthMiddleware(auth *service.AuthService, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
 		if !strings.HasPrefix(header, "Bearer ") {
@@ -237,380 +468,181 @@ func AuthMiddleware(secret []byte, next http.Handler) http.Handler {
 			return
 		}
 		tokenStr := strings.TrimPrefix(header, "Bearer ")
-
-		userID, err := validateToken(tokenStr, secret)
+		userID, err := auth.ParseUserID(tokenStr)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid token")
 			return
 		}
-
 		ctx := context.WithValue(r.Context(), userIDKey, userID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
-```
 
-Use a custom `contextKey` type (not a string constant alone) to avoid collisions with other packages.
-
-### Helper to read user ID in handlers
-
-```go
-func UserIDFromContext(ctx context.Context) (primitive.ObjectID, error) {
+func UserIDFromContext(ctx context.Context) (primitive.ObjectID, bool) {
 	id, ok := ctx.Value(userIDKey).(primitive.ObjectID)
-	if !ok {
-		return primitive.NilObjectID, errors.New("no user in context")
-	}
-	return id, nil
+	return id, ok
+}
+
+// Protect wraps a HandlerFunc with auth middleware.
+func Protect(auth *service.AuthService, h http.HandlerFunc) http.HandlerFunc {
+	return AuthMiddleware(auth, h).ServeHTTP
 }
 ```
 
-### Route groups
+### Activity 6.1 — Protect one route first
 
-**Public** (no middleware):
+```go
+http.HandleFunc("GET /projects", handler.Protect(authSvc, handler.ListProjectsHandler(projectSvc)))
+```
 
-- `GET /health`
-- `POST /auth/register`
-- `POST /auth/login`
+### Activity 6.2
 
-**Protected** (wrap with `AuthMiddleware`):
+```bash
+curl -i http://localhost:8080/projects
+# expect 401
 
-- All project and task routes
+TOKEN=$(curl -s -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"securepass123"}' | jq -r .token)
 
-With Go 1.22 `ServeMux`, you can mount a sub-mux or wrap individual handlers.
+curl -i http://localhost:8080/projects -H "Authorization: Bearer $TOKEN"
+# expect 200 (may be empty list)
+```
+
+**Gate:** 401 without token, 200 with token.
 
 ---
 
-## 5. Multi-tenant data scoping
+## Step 7 — Add `user_id` to projects and scope queries
 
-### Add user_id to projects
+### Activity 7.1 — Model
+
+Add to `Project`:
 
 ```go
-type Project struct {
-	ID          primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	UserID      primitive.ObjectID `bson:"user_id" json:"user_id"`
-	Name        string             `bson:"name" json:"name"`
-	// ...
-}
+UserID primitive.ObjectID `bson:"user_id" json:"user_id"`
+```
+
+Wipe old project docs if needed (they have no `user_id`):
+
+```javascript
+use desklog
+db.projects.deleteMany({})
+db.tasks.deleteMany({})
 ```
 
 Index: `db.projects.createIndex({ user_id: 1 })`
 
-### Every query filters by user
+### Activity 7.2 — Repository filters
 
-**List projects:**
-
-```go
-filter := bson.M{"user_id": userID}
-cursor, err := col.Find(ctx, filter)
-```
-
-**Get project by ID:**
+Every project list/get/update/delete filter must include `user_id`. Example get:
 
 ```go
-filter := bson.M{"_id": id, "user_id": userID}
-err := col.FindOne(ctx, filter).Decode(&p)
+err := r.col.FindOne(ctx, bson.M{"_id": id, "user_id": userID}).Decode(&p)
 ```
 
-If not found — return `ErrNotFound` → 404. This covers both "ID does not exist" and "exists but belongs to another user." Hiding existence of other users' data is a deliberate security choice.
+Create sets `p.UserID = userID` in the **service** from context (handler passes userID into service methods).
 
-**Create project:**
+### Activity 7.3 — Handlers/services
 
-```go
-p.UserID = userID  // from context, not request body
-```
+- Handler: `userID, ok := UserIDFromContext(r.Context())` → if !ok → 401  
+- Service: `Create(ctx, userID, name, description)`, `List(ctx, userID)`, etc.  
+- Tasks: before mutate/read, verify task’s project belongs to `userID`
 
-### Task authorization through project
+### Activity 7.4 — Protect **all** project/task routes with `Protect`
 
-Before returning or modifying a task:
+Leave `/health`, `/auth/*` public.
 
-1. Load task
-2. Load its project
-3. Verify `project.UserID == currentUserID`
+### Activity 7.5 — Two-user test
 
-Or query with a join/filter in repository. Never trust `project_id` from body without verifying ownership.
+Register user A and B. Create project as A. As B, `GET /projects/{A's id}` → **404**.
 
 ---
 
-## 6. Validation
+## Step 8 — Structured logging (`slog`)
 
-### Why validate in the service layer
-
-Handlers parse HTTP. Services enforce **business rules**. Same rules apply whether the caller is HTTP, a CLI, or a test.
-
-### Validation rules for Desklog
-
-| Field | Rule |
-|-------|------|
-| email | contains `@`, length 3–254 |
-| password | minimum 8 characters |
-| project name | non-empty, max 100 chars |
-| task title | non-empty, max 200 chars |
-| task status | exactly `todo`, `doing`, or `done` |
-
-### Validation error type
+### Activity 8.1 — In `main`
 
 ```go
-type ValidationError struct {
-	Field   string
-	Message string
-}
-
-func (e *ValidationError) Error() string {
-	return e.Field + ": " + e.Message
-}
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+slog.SetDefault(logger)
 ```
 
-### HTTP response shape
+### Activity 8.2 — Optional request-id middleware
 
-```json
-{
-  "error": "validation failed",
-  "fields": [
-    {"field": "email", "message": "invalid format"},
-    {"field": "password", "message": "must be at least 8 characters"}
-  ]
-}
-```
+Generate `uuid.NewString()`, put on context, log `"request_id"`.
 
-Status: **400 Bad Request**
+**Never log:** passwords, JWTs, password hashes.
 
-Collect multiple field errors on register rather than failing on the first one — better UX.
+### Activity 8.3
+
+Hit an endpoint; confirm JSON log lines in the server terminal.
 
 ---
 
-## 7. Structured logging with slog
+## Step 9 — Tests
 
-### Why not log.Printf
+### Activity 9.1 — Service unit test (fake repo or real logic)
 
-`log.Printf("user %s did %s", id, action)` is hard to search in production log systems. **Structured logs** are key-value pairs, usually JSON:
+Minimum cases:
 
-```json
-{"level":"INFO","msg":"request","method":"GET","path":"/projects","status":200,"duration_ms":12}
-```
+- create task with missing project → error  
+- invalid task status → `ValidationError`
 
-### Setup
-
-```go
-import "log/slog"
-
-func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
-}
-```
-
-### Usage
+### Activity 9.2 — Handler test with `httptest`
 
 ```go
-slog.Info("request completed",
-	"method", r.Method,
-	"path", r.URL.Path,
-	"status", statusCode,
-	"duration_ms", elapsed.Milliseconds(),
-)
-
-slog.Error("database error", "err", err)
+req := httptest.NewRequest(http.MethodGet, "/projects", nil)
+rec := httptest.NewRecorder()
+// call protected handler without Authorization
+// expect 401
 ```
 
-### Request ID middleware
+Also: valid token → 200; other user’s project id → 404.
 
-Generate UUID per request, add to context and all log lines:
-
-```go
-requestID := uuid.New().String()
-ctx := context.WithValue(r.Context(), requestIDKey, requestID)
-slog.Info("request started", "request_id", requestID)
-```
-
-### Never log
-
-- Passwords
-- JWT tokens
-- Password hashes
-
----
-
-## 8. Testing
-
-### Why tests matter here
-
-Auth and scoping bugs are **IDOR vulnerabilities** (Insecure Direct Object Reference) — User A accesses User B's data by guessing IDs. Tests catch regressions.
-
-### Three levels
-
-| Level | What it tests | Needs real DB? |
-|-------|---------------|----------------|
-| Unit (service) | Business rules with fake repos | No |
-| Handler (`httptest`) | HTTP status, headers, body | No (mock service) |
-| Integration | Full stack | Yes (optional) |
-
-### Table-driven tests
-
-Go idiom for multiple cases:
-
-```go
-func TestCreateTask_Validation(t *testing.T) {
-	tests := []struct {
-		name    string
-		title   string
-		wantErr bool
-	}{
-		{"empty title", "", true},
-		{"valid", "Write tests", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := svc.Create(context.Background(), projectID, tt.title, "todo")
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-```
-
-### Fake repository
-
-```go
-type fakeProjectRepo struct {
-	project model.Project
-	err     error
-}
-
-func (f *fakeProjectRepo) GetByID(ctx context.Context, id primitive.ObjectID) (model.Project, error) {
-	return f.project, f.err
-}
-```
-
-Service tests use fakes — fast, no MongoDB.
-
-### httptest — test handlers without network
-
-```go
-func TestListProjects_Unauthorized(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/projects", nil)
-	// no Authorization header
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("got status %d, want 401", rec.Code)
-	}
-}
-```
-
-### Minimum tests for exit
-
-- Service: create task when project missing → error
-- Service: invalid status → validation error
-- Handler: `GET /projects` without token → 401
-- Handler: `GET /projects` with valid token → 200
-- Handler: access another user's project ID → 404 (or 403)
-
-Run: `go test ./...`
-
----
-
-## 9. Auth endpoints
-
-Apply the recipe for each of these the same way you did for projects: **contract first**, then model → repo → service → handler → wire → verify.
-
-### POST /auth/register
-
-Request:
-
-```json
-{"email": "you@example.com", "password": "securepass123"}
-```
-
-Response `201`:
-
-```json
-{"id": "...", "email": "you@example.com", "created_at": "..."}
-```
-
-Errors: `400` validation, `409` duplicate email
-
-### POST /auth/login
-
-Request: same shape  
-Response `200`:
-
-```json
-{"token": "eyJ...", "expires_at": "..."}
-```
-
-Errors: `401` invalid credentials (always same message)
-
-### Example session
+### Activity 9.3
 
 ```bash
-# Register
-curl -s -X POST http://localhost:8080/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"email":"you@example.com","password":"securepass123"}'
-
-# Login
-TOKEN=$(curl -s -X POST http://localhost:8080/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"you@example.com","password":"securepass123"}' \
-  | jq -r .token)
-
-# Authenticated request
-curl -s http://localhost:8080/projects \
-  -H "Authorization: Bearer $TOKEN"
+go test ./...
 ```
 
----
-
-## 10. Build order (recipe order)
-
-| Step | Recipe | What to build |
-|------|--------|---------------|
-| 1 | Model + data | User model + repository |
-| 2 | Business + handler + wire | Register + login (no middleware yet); curl both |
-| 3 | Business | JWT issue + validate helpers |
-| 4 | Wire | Auth middleware; protect one route; curl 401 then 200 |
-| 5 | Model + data | Add `user_id` to projects (wipe dev data if needed) |
-| 6 | Data + business | Scope all project/task queries by user from context |
-| 7 | Business | Consistent validation errors in services |
-| 8 | Cross-cutting | Replace logging with `slog` |
-| 9 | Verify | Tests listed above; `go test ./...` |
-| 10 | Docs | README auth flow |
-
-Do not “add auth everywhere” before register/login work in isolation.
+**Gate:** all tests green.
 
 ---
 
-## 11. Common mistakes
+## Step 10 — README auth section
 
-| Mistake | Risk |
-|---------|------|
-| Plaintext passwords | Catastrophic on DB leak |
-| `user_id` from request body | Full auth bypass |
-| Different login errors per case | User enumeration |
-| Logging JWTs | Token theft from logs |
-| No tests on auth | IDOR ships to production |
-| 403 for missing + wrong owner | Leaks that resource exists — 404 is safer for reads |
+### Activity 10.1
+
+Document register → login → `Authorization: Bearer` curl flow and that data is per-user.
 
 ---
 
-## 12. Exit checklist
+## Common mistakes
 
-- [ ] Register and login work
-- [ ] JWT on all data endpoints
-- [ ] Projects scoped by `user_id`
-- [ ] Validation on all writes
-- [ ] Structured logging
-- [ ] `go test ./...` passes
-- [ ] README documents auth flow
+| Mistake | Fix |
+|---------|-----|
+| `user_id` from body | Ignore body; use context |
+| Different login errors | Always `invalid credentials` |
+| Protect `/auth/login` | Keep auth routes public |
+| Plaintext passwords | bcrypt only |
+| 403 for other user’s resource | Prefer 404 |
+
+---
+
+## Exit checklist
+
+- [ ] Register + login work  
+- [ ] Data routes return 401 without token  
+- [ ] Projects scoped by `user_id`  
+- [ ] Other user’s IDs → 404  
+- [ ] `slog` in use; no secrets in logs  
+- [ ] `go test ./...` passes  
+- [ ] README auth flow  
 
 **Commit:** `feat(phase-3): user auth, validation, and tests`
 
 ---
 
-**Always:** [The endpoint recipe](./the-endpoint-recipe.md)
-
+**Always:** [The endpoint recipe](./the-endpoint-recipe.md)  
 **Next:** [Phase 4 Manual — Time Entries & Reporting](./phase-04-time-entries-reporting.md)

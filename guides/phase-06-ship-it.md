@@ -1,165 +1,153 @@
 # Phase 6 Manual — Ship It
 
 **Duration:** 1 week  
-**Prerequisite:** Phase 5 complete
+**Prerequisite:** Phase 5 complete  
+**Audience:** Beginners — Part A + Part B activities (same framing as Phases 1–5)
 
-You built a real backend. Phase 6 is about **delivery** — packaging Desklog so another developer can clone, run, and understand it without your help. This is portfolio and team handoff quality.
+**How to use**
+
+1. Read Part A (why `/ready`, Docker, CI, README).
+2. Do Part B Activities in order.
+3. `/ready` still follows the [endpoint recipe](./the-endpoint-recipe.md).
+4. End with the [final quiz](./final-quiz.md).
 
 ---
 
-## 0. What changes in this phase
+# Part A — Concepts (read first)
+
+## A0. What you ship
 
 | Addition | Purpose |
 |----------|---------|
-| Dockerfile | Reproducible build and run |
-| docker-compose | One command: API + MongoDB |
-| `/ready` endpoint | Readiness for load balancers |
-| CI pipeline | Automated test on every push |
-| Portfolio README | Architecture, setup, API examples |
-| Release tag | Milestone marker (`v0.1.0`) |
+| `GET /ready` | Ready for traffic only if Mongo is up |
+| Dockerfile | Reproducible Linux binary image |
+| docker-compose | One command: API + Mongo |
+| `.env.example` | Config without secrets in git |
+| CI | `go vet` + `go test` on push |
+| Portfolio README | Clone → run without asking you |
+| Tag `v0.1.0` | Milestone |
 
-**Same habit:** [The endpoint recipe](./the-endpoint-recipe.md). Shipping is mostly ops, but `/ready` is still a normal endpoint:
-
-| Recipe step | `/ready` |
-|-------------|----------|
-| Contract | `GET /ready` → `200 {"status":"ready"}` or `503` if DB down |
-| Model | None |
-| Data | Ping Mongo via existing client |
-| Business | None beyond “DB reachable?” |
-| Handler | `ReadyHandler` in `internal/handler/` (or health file) |
-| Wire | Register in `main` next to `/health` |
-| Verify | Stop Mongo → 503; start Mongo → 200 |
-
-Docker/CI/README are verify-and-deliver steps for the whole API, not a different coding style.
+| Endpoint | Question |
+|----------|----------|
+| `GET /health` | Is the process alive? (always cheap) |
+| `GET /ready` | Can we serve? (ping Mongo) → `503` if not |
 
 ---
 
-## 1. Liveness vs readiness
+## A1. Multi-stage Docker
 
-### Two health checks, two questions
+**Build stage:** compile with `golang` image.  
+**Run stage:** copy binary into tiny `alpine` (+ CA certs for HTTPS webhooks).
 
-| Endpoint | Question | Should fail when |
-|----------|----------|------------------|
-| `GET /health` | Is the process running? | Never (if it responds, it's alive) |
-| `GET /ready` | Can this instance serve traffic? | MongoDB unreachable |
+`CGO_ENABLED=0` → static-ish pure Go binary for Alpine.
 
-### Why both exist
+---
 
-**Orchestrators** (Kubernetes, ECS, load balancers) use:
+## A2. Compose networking
 
-- **Liveness probe** → restart container if deadlocked
-- **Readiness probe** → remove from traffic until dependencies ready
+Inside Compose, hostname `mongodb` resolves to the Mongo service.  
+API env: `MONGODB_URI=mongodb://mongodb:27017`.
 
-Desklog without MongoDB should not receive API traffic even if the Go process is up.
+`depends_on` ≠ “Mongo ready” — retry ping at startup.
 
-### Implement /ready
+---
+
+# Part B — Build steps
+
+---
+
+## Step 1 — `GET /ready` (recipe practice)
+
+### Contract
+
+- `GET /ready`  
+- Mongo OK → `200` `{"status":"ready"}`  
+- Mongo down → `503` `{"error":"database unavailable"}`  
+
+### File: add to `internal/handler/health.go` (or `ready.go`)
 
 ```go
-func readyHandler(client *mongo.Client) http.HandlerFunc {
+func ReadyHandler(client *mongo.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-
 		if err := client.Ping(ctx, nil); err != nil {
 			writeError(w, http.StatusServiceUnavailable, "database unavailable")
 			return
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	}
 }
 ```
 
-- MongoDB down → **503 Service Unavailable** (not 500 panic)
-- MongoDB up → **200**
+**Note:** handlers usually avoid `mongo` imports — for this learning phase, either pass a small `Pinger` interface or accept the client here. Prefer:
 
-`/health` stays simple — no DB check.
+```go
+type Pinger interface{ Ping(ctx context.Context) error }
+```
+
+### Activity 1.1 — Wire public route (no auth)
+
+```go
+http.HandleFunc("GET /ready", handler.ReadyHandler(...))
+```
+
+### Activity 1.2
+
+```bash
+curl -i http://localhost:8080/ready   # 200
+docker stop desklog-mongo             # or stop compose mongo
+curl -i http://localhost:8080/ready   # 503
+docker start desklog-mongo
+```
+
+**Gate:** 200 then 503 then 200 again.
 
 ---
 
-## 2. Docker fundamentals
+## Step 2 — Dockerfile
 
-### Image vs container
-
-- **Image** — snapshot of filesystem + config (the recipe)
-- **Container** — running instance of an image
-
-Your Dockerfile defines how to build the API image.
-
-### Multi-stage build — why
-
-A Go build needs the full compiler (~hundreds of MB). Production only needs the binary + CA certificates (~20 MB).
-
-**Stage 1 (build):** compile  
-**Stage 2 (run):** copy binary into minimal image
-
-### Dockerfile
+### File: `Dockerfile` (full file)
 
 ```dockerfile
-# --- build ---
 FROM golang:1.22-alpine AS build
-
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /desklog ./cmd/api
 
-# --- run ---
 FROM alpine:3.19
-
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=build /desklog .
-
 EXPOSE 8080
 ENTRYPOINT ["./desklog"]
 ```
 
-### Flags explained
+### File: `.dockerignore`
 
-| Flag | Meaning |
-|------|---------|
-| `CGO_ENABLED=0` | Pure Go binary, no C dependencies — runs in minimal Alpine |
-| `GOOS=linux` | Target Linux (Docker containers are Linux) |
-| `ca-certificates` | HTTPS calls to webhooks need root CAs |
+```
+.git
+.env
+guides/
+*.md
+```
 
-### Build and run
+### Activity 2.1
 
 ```bash
 docker build -t desklog .
-docker run --rm -p 8080:8080 \
-  -e MONGODB_URI=mongodb://host.docker.internal:27017 \
-  -e MONGODB_DATABASE=desklog \
-  -e JWT_SECRET=dev-secret-change-me \
-  desklog
 ```
 
-`host.docker.internal` — Docker Desktop alias for your host machine (where MongoDB may run). On Linux Docker, use host network or compose instead.
-
-### Optional: embed version
-
-```dockerfile
-RUN CGO_ENABLED=0 go build -ldflags="-X main.version=0.1.0" -o /desklog ./cmd/api
-```
-
-In `main.go`:
-
-```go
-var version = "dev"
-```
-
-Expose in `/health`: `{"status":"ok","version":"0.1.0"}`
+Expect build success.
 
 ---
 
-## 3. docker-compose — full stack
+## Step 3 — docker-compose
 
-### Why compose
-
-One file defines API + MongoDB + env vars + volumes. `docker compose up` is your demo command.
+### File: `docker-compose.yml` (full file)
 
 ```yaml
 services:
@@ -187,43 +175,25 @@ volumes:
   desklog_data:
 ```
 
-### Service names as hostnames
+### Activity 3.1 — Startup retry in `main` (if needed)
 
-Inside the `api` container, `mongodb://mongodb:27017` works because Docker DNS resolves `mongodb` to the MongoDB container.
+Loop Ping up to ~30s so API waits for Mongo on first boot.
 
-### Startup race
+### Activity 3.2
 
-`depends_on` waits for container **start**, not MongoDB **ready**. Add retry loop in app:
-
-```go
-for i := 0; i < 30; i++ {
-	if err := client.Ping(ctx, nil); err == nil {
-		break
-	}
-	time.Sleep(time.Second)
-}
+```bash
+docker compose up --build
+curl -i http://localhost:8080/health
+curl -i http://localhost:8080/ready
 ```
 
-Or use compose healthcheck on mongodb + `condition: service_healthy`.
-
-### Volume
-
-`desklog_data` persists MongoDB data across `docker compose down` (without `-v`).
+**Gate:** both return 200.
 
 ---
 
-## 4. Twelve-factor configuration
+## Step 4 — Twelve-factor config files
 
-### Principles for Desklog
-
-| Rule | Implementation |
-|------|----------------|
-| Config in environment | `PORT`, `MONGODB_URI`, `JWT_SECRET`, `WEBHOOK_URL` |
-| No secrets in image | Pass via compose env or `.env` file (gitignored) |
-| No secrets in git | Commit `.env.example` only |
-| Fail fast | Exit at startup if required var missing |
-
-### .env.example
+### File: `.env.example`
 
 ```
 PORT=8080
@@ -233,245 +203,119 @@ JWT_SECRET=replace-with-long-random-string
 WEBHOOK_URL=
 ```
 
-### .gitignore
+### Activity 4.1
 
-```
-.env
-```
-
-Developers copy `.env.example` to `.env` locally.
+Ensure `.env` is in `.gitignore`. Commit `.env.example` only.  
+App already fatals on missing required secrets — keep that.
 
 ---
 
-## 5. CI pipeline
+## Step 5 — CI
 
-### Purpose
-
-Run tests automatically on every push. Broken main on a public repo is a red flag for reviewers.
-
-### GitHub Actions — minimum workflow
-
-`.github/workflows/ci.yml`:
+### File: `.github/workflows/ci.yml` (full file)
 
 ```yaml
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
           cache: true
-
       - name: Vet
         run: go vet ./...
-
       - name: Test
         run: go test ./...
 ```
 
-### What each step does
+### Activity 5.1
 
-| Step | Catches |
-|------|---------|
-| `go vet` | Suspicious constructs (unreachable code, printf mistakes) |
-| `go test` | Regressions in logic |
-
-### Level up (optional)
-
-- `golangci-lint`
-- MongoDB service container for integration tests
-- `go build ./...` to verify all packages compile
-
-Push to GitHub and confirm CI passes.
+Push to GitHub; confirm the workflow is green.
 
 ---
 
-## 6. Portfolio README
+## Step 6 — Portfolio README
 
-Your README is part of the deliverable. Structure:
+### Activity 6.1 — Rewrite/expand root `README.md` to include:
 
-### 1. Title and one-liner
+1. One-liner what Desklog is  
+2. Features list  
+3. Architecture (handler → service → repo → Mongo + worker)  
+4. Quick start: `docker compose up --build`  
+5. Env var table  
+6. Full curl walkthrough (register → … → report)  
+7. Link to `guides/`  
+8. Short design decisions (JWT, 404 for others’ resources, etc.)
 
-> **Desklog** — Multi-user work-log API in Go and MongoDB.
+### Activity 6.2 — Fresh-clone test
 
-### 2. Features
+1. Clone into a **new** folder  
+2. Follow README only  
+3. Under ~10 minutes: health OK + one authenticated create  
 
-- JWT authentication
-- Projects, tasks, time entries
-- Summary reports with aggregation
-- Graceful shutdown, background jobs
-- Dockerized
-
-### 3. Architecture diagram
-
-```
-┌────────┐     HTTP      ┌───────────┐     ┌─────────┐     ┌──────────┐
-│ Client │ ────────────► │ Handlers  │ ──► │ Service │ ──► │ MongoDB  │
-└────────┘               └───────────┘     └─────────┘     │ Repos    │
-                                 │                │         └──────────┘
-                                 │                ▼
-                                 │         ┌──────────┐
-                                 └────────►│ Worker   │
-                                           └──────────┘
-```
-
-### 4. Quick start (Docker — primary path)
-
-```bash
-git clone <repo>
-cd go-practice
-docker compose up --build
-curl http://localhost:8080/health
-```
-
-### 5. Local development (without Docker)
-
-Prerequisites, MongoDB setup, `go run ./cmd/api`
-
-### 6. Environment variables
-
-Table of all vars with required/optional and description.
-
-### 7. API walkthrough
-
-Full curl session: register → login → create project → task → log time → report. Copy-pasteable.
-
-### 8. Project structure
-
-Brief explanation of `cmd/`, `internal/handler`, etc.
-
-### 9. Design decisions
-
-Short honest notes:
-
-- Why JWT
-- Why MongoDB references over embedding
-- 404 for other users' resources (hide existence)
-
-Interviewers read this section.
-
-### 10. Learning guides
-
-Link to `guides/` for phased curriculum.
+Fix anything that fails.
 
 ---
 
-## 7. Release tag
+## Step 7 — Release tag
 
-Mark the milestone:
+### Activity 7.1
 
 ```bash
 git tag -a v0.1.0 -m "Desklog MVP: auth, CRUD, reporting, docker"
 git push origin v0.1.0
 ```
 
-Semantic versioning: `0.1.0` = initial working release, API may still change.
+(Only when you are ready and code is committed.)
 
 ---
 
-## 8. Optional polish
+## Step 8 — Capstone quiz
 
-### Makefile
+### Activity 8.1
 
-```makefile
-.PHONY: run test docker
-
-run:
-	go run ./cmd/api
-
-test:
-	go test ./...
-
-docker:
-	docker compose up --build
-```
-
-### .dockerignore
-
-```
-.git
-.env
-*.md
-guides/
-```
-
-Smaller build context, faster builds.
+Complete **[Final quiz — ship a new contract](./final-quiz.md)** (project notes).  
+Fill the recipe card **before** coding.
 
 ---
 
-## 9. Fresh-clone test
+## Common mistakes
 
-Simulate a reviewer:
-
-1. Clone to a new directory
-2. Follow README only (no asking you questions)
-3. `docker compose up --build`
-4. Complete API walkthrough with curl
-5. Under 10 minutes to working API
-
-If any step fails, fix README or compose — not their problem.
+| Mistake | Fix |
+|---------|-----|
+| README only shows `go run` | Lead with Compose |
+| Secrets in git | `.env` gitignored |
+| Single huge image | Multi-stage build |
+| No CI | Add workflow |
 
 ---
 
-## 10. Common mistakes
+## Exit checklist — project complete
 
-| Mistake | Impact |
-|---------|--------|
-| README only shows `go run` | Reviewer without Go/Mongo setup stuck |
-| Secrets in compose committed | Security issue |
-| Single-stage 800MB image | Looks unprofessional |
-| No CI | Broken tests on main |
-| Endpoints listed without curl examples | Hard to verify quickly |
-
----
-
-## 11. Exit checklist — project complete
-
-- [ ] Multi-stage Dockerfile builds
-- [ ] `docker compose up` runs API + MongoDB
-- [ ] `/health` and `/ready` work
-- [ ] `.env.example` committed, `.env` gitignored
-- [ ] CI runs vet + test on push
-- [ ] README: quick start, env vars, full API walkthrough, architecture
-- [ ] Tag `v0.1.0`
-- [ ] All phase checklists in PROJECT.md marked done
+- [ ] `/ready` works (503 when Mongo down)  
+- [ ] Multi-stage Dockerfile  
+- [ ] `docker compose up --build` runs stack  
+- [ ] `.env.example` committed  
+- [ ] CI green  
+- [ ] README: quick start + curl walkthrough  
+- [ ] Tag `v0.1.0`  
+- [ ] Final quiz attempted  
 
 **Commit:** `feat(phase-6): docker, ci, and production readme`
-
----
-
-## 12. What comes after
-
-Desklog is a foundation. Natural extensions (not required now):
-
-- **Metrics** — Prometheus `/metrics` endpoint
-- **Rate limiting** — protect `/auth/login`
-- **Email** — real SendGrid from worker
-- **Frontend** — React app consuming your API
-- **OpenAPI** — machine-readable spec for clients
-
-Before inventing features randomly, prove the habit:
-
-### Capstone quiz
-
-Do **[Final quiz — ship a new contract](./final-quiz.md)** without looking up a walkthrough. If you can fill the recipe card and implement the endpoint cleanly, Phase 1–6 worked.
-
-Depth on one service teaches more than jumping to microservices. Ship one more feature on Desklog before splitting anything.
 
 ---
 
 Congratulations — you built and shipped a Go backend.
 
 **Always:** [The endpoint recipe](./the-endpoint-recipe.md)  
-**Back to index:** [guides/README.md](./README.md)
+**Quiz:** [final-quiz.md](./final-quiz.md)  
+**Index:** [guides/README.md](./README.md)
