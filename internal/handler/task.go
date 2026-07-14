@@ -93,3 +93,58 @@ func GetTaskHandler(mem *store.MemoryStore) http.HandlerFunc {
 	}
 }
 
+func UpdateTaskHandler(mem *store.MemoryStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		taskID := r.PathValue("id")
+		task, ok := mem.GetTask(taskID)
+
+		if !ok {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+
+		var req struct {
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+
+		defer r.Body.Close()
+		if req.Title != "" {
+			task.Title = req.Title
+		}
+
+		if !validStatus(req.Status) {
+			writeError(w, http.StatusBadRequest, "status must be todo, doing, or done")
+			return
+		}
+
+		task.Status = req.Status
+		task.UpdatedAt = time.Now().UTC()
+
+		if !mem.UpdateTask(task) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(task)
+	}
+}
+
+func DeleteTaskHandler(mem *store.MemoryStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		taskID := r.PathValue("id")
+		if !mem.DeleteTask(taskID) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

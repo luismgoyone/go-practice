@@ -4,25 +4,34 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/luismgoyone/go-practice/internal/handler"
 	"github.com/luismgoyone/go-practice/internal/store"
 )
 
+func withLogging(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next(w, r)
+		log.Printf("%s %s %v", r.Method, r.URL.Path, time.Since(start))
+	}
+}
+
 func main() {
 	mem := store.NewMemoryStore()
 
-	http.HandleFunc("GET /health", handler.HealthHandler)
-	http.HandleFunc("POST /projects", handler.CreateProjectHandler(mem))
-	http.HandleFunc("GET /projects", handler.ListProjectsHandler(mem))
-	http.HandleFunc("GET /projects/{id}", handler.GetProjectHandler(mem))
-	http.HandleFunc("GET /projects/{id}/tasks", handler.ListTasksByProjectHandler(mem))
-	http.HandleFunc("POST /projects/{id}/tasks", handler.CreateTaskHandler(mem))
-	http.HandleFunc("GET /tasks/{id}", handler.GetTaskHandler(mem))
-	http.HandleFunc("PATCH /projects/{id}", handler.UpdateProjectHandler(mem))
-	http.HandleFunc("DELETE /projects/{id}", handler.DeleteProjectHandler(mem))
-	http.HandleFunc("PATCH /tasks/{id}", handler.UpdateTaskHandler(mem))
-	http.HandleFunc("DELETE /tasks/{id}", handler.DeleteTaskHandler(mem))
+	http.HandleFunc("GET /health", withLogging(handler.HealthHandler))
+	http.HandleFunc("POST /projects", withLogging(handler.CreateProjectHandler(mem)))
+	http.HandleFunc("GET /projects", withLogging(handler.ListProjectsHandler(mem)))
+	http.HandleFunc("GET /projects/{id}", withLogging(handler.GetProjectHandler(mem)))
+	http.HandleFunc("GET /projects/{id}/tasks", withLogging(handler.ListTasksByProjectHandler(mem)))
+	http.HandleFunc("POST /projects/{id}/tasks", withLogging(handler.CreateTaskHandler(mem)))
+	http.HandleFunc("GET /tasks/{id}", withLogging(handler.GetTaskHandler(mem)))
+	http.HandleFunc("PATCH /projects/{id}", withLogging(handler.UpdateProjectHandler(mem)))
+	http.HandleFunc("DELETE /projects/{id}", withLogging(handler.DeleteProjectHandler(mem)))
+	http.HandleFunc("PATCH /tasks/{id}", withLogging(handler.UpdateTaskHandler(mem)))
+	http.HandleFunc("DELETE /tasks/{id}", withLogging(handler.DeleteTaskHandler(mem)))
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
