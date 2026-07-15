@@ -2,11 +2,13 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
-	"github.com/luismgoyone/go-practice/internal/model"
+	"github.com/luismgoyone/go-practice/internal/service"
 	"github.com/luismgoyone/go-practice/internal/store"
 )
 
@@ -20,7 +22,7 @@ func newID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-func CreateProjectHandler(mem *store.MemoryStore) http.HandlerFunc {
+func CreateProjectHandler(svc *service.ProjectService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Name        string `json:"name"`
@@ -32,23 +34,20 @@ func CreateProjectHandler(mem *store.MemoryStore) http.HandlerFunc {
 		}
 		defer r.Body.Close()
 
-		if req.Name == "" {
-			writeError(w, http.StatusBadRequest, "name is required")
+		project, err := svc.Create(r.Context(), req.Name, req.Description)
+		var ve *service.ValidationError
+		if errors.As(err, &ve) {
+			writeError(w, http.StatusBadRequest, ve.Message)
+			return
+		}
+		if err != nil {
+			log.Println(err)
+			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 
-		now := time.Now().UTC()
-		project := model.Project{
-			ID:          newID(),
-			Name:        req.Name,
-			Description: req.Description,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		}
-		project = mem.CreateProject(project)
-
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated) // 201
+		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(project)
 	}
 }

@@ -1,0 +1,10 @@
+curl -i -X POST http://localhost:8080/projects \
+  -H "Content-Type: application/json" \
+  -d '{"name":"first project","description":"first description"}'
+
+curl -i -X POST http://localhost:8080/projects/<PROJECT_ID>/tasks \
+-H "Content-Type: application/json" \
+-d '{"title":"First task"}'
+  
+  curl -s http://localhost:8080/projects/<PROJECT_ID>/tasks
+  curl -s http://localhost:8080/tasks/<TASK_ID>

@@ -15,7 +15,11 @@ Replace `github.com/<you>/go-practice` with your real module path from `go.mod` 
 
 ---
 
+
+
 # Part A — Concepts (read first)
+
+
 
 ## A0. What you are building
 
@@ -32,6 +36,8 @@ By the end of this phase you will have:
 Phases 2–6 add MongoDB, auth, reporting, and deployment on top of this habit — not a different one.
 
 ---
+
+
 
 ## A1. How a backend API works
 
@@ -58,6 +64,8 @@ The Go function that handles one route is a **handler**.
 
 ---
 
+
+
 ## A2. Modules, packages, folders
 
 - A **module** (`go.mod`) is your project identity and import path.
@@ -79,6 +87,8 @@ The Go function that handles one route is a **handler**.
 
 ---
 
+
+
 ## A3. Types you need
 
 **Struct** — named fields:
@@ -99,6 +109,8 @@ Capitalized fields are **exported** (usable from other packages).
 Pointers (`*http.Request`, `*MemoryStore`) mean “this value can be shared/modified.” You do not need deep pointer theory for Phase 1.
 
 ---
+
+
 
 ## A4. JSON
 
@@ -122,6 +134,8 @@ Decode from body: `json.NewDecoder(r.Body).Decode(&req)`
 Always set `Content-Type: application/json` before writing JSON.
 
 ---
+
+
 
 ## A5. Methods and status codes
 
@@ -149,6 +163,8 @@ Never return `200` with `{"error":"..."}`. Use the real status code.
 
 ---
 
+
+
 ## A6. Handler pattern (memorize this)
 
 ```
@@ -163,11 +179,15 @@ That is steps 5–7 of [the recipe](./the-endpoint-recipe.md) in more detail.
 
 ---
 
+
+
 # Part B — Build steps (do these in order)
 
 Each step: **create/replace files → read the “why” → run check → only then continue.**
 
 ---
+
+
 
 ## Step 1 — Module and folders
 
@@ -193,6 +213,8 @@ mkdir -p cmd/api internal/model internal/store internal/handler
 
 ---
 
+
+
 ## Step 2 — Health endpoint only
 
 **Recipe for this step:** contract → handler → wire → verify (no model/store yet).
@@ -202,6 +224,8 @@ mkdir -p cmd/api internal/model internal/store internal/handler
 - `GET /health`
 - Success: `200` + `{"status":"ok"}`
 - No auth, no body
+
+
 
 ### File: `internal/handler/health.go` (full file)
 
@@ -231,6 +255,8 @@ func HealthHandler(w http.ResponseWriter, r *http.Request) {
 | Set `Content-Type`          | Clients know the body is JSON              |
 | Fixed JSON string           | Health needs no structs yet                |
 | **No** `func main` here     | Server startup belongs only in `cmd/api`   |
+
+
 
 
 ### File: `cmd/api/main.go` (full file for this step)
@@ -298,6 +324,8 @@ Expect `200` and `{"status":"ok"}`. Stop the server with Ctrl+C when done.
 
 ---
 
+
+
 ## Step 3 — Models
 
 **Recipe:** contract shapes → model files.
@@ -331,6 +359,8 @@ type Project struct {
 | `time.Time`                             | Timestamps; we will set them in UTC in the handler                                    |
 
 
+
+
 ### File: `internal/model/task.go` (full file)
 
 ```go
@@ -361,6 +391,8 @@ type Task struct {
 **Check:** files save with no red errors. Still no need to run the server for models alone.
 
 ---
+
+
 
 ## Step 4 — In-memory store
 
@@ -509,6 +541,8 @@ func (s *MemoryStore) DeleteTask(id string) bool {
 
 ---
 
+
+
 ## Step 5 — POST /projects (first write endpoint)
 
 **Recipe:** contract → (model/store done) → handler → wire → verify.
@@ -519,6 +553,8 @@ func (s *MemoryStore) DeleteTask(id string) bool {
 - Body: `{"name":"...","description":"..."}` (`name` required)
 - Success: `201` + full project including `id` and timestamps
 - Errors: `400` invalid JSON or missing name
+
+
 
 ### File: `internal/handler/project.go` (start with helpers + create only)
 
@@ -603,6 +639,8 @@ func CreateProjectHandler(mem *store.MemoryStore) http.HandlerFunc {
 | Param named `mem`                                               | Avoids `store` colliding with package name `store`                                         |
 
 
+
+
 ### Update `cmd/api/main.go` (full file)
 
 ```go
@@ -661,6 +699,8 @@ Expect `201` with an `id`, then `400` for bad JSON.
 
 ---
 
+
+
 ## Step 6 — GET /projects and GET /projects/{id}
 
 **Contracts**
@@ -670,6 +710,8 @@ Expect `201` with an `id`, then `400` for bad JSON.
 | -------------------- | ----------------------------------------------- | ---------------- |
 | `GET /projects`      | `200` + JSON array (empty list = `[]`, not 404) | —                |
 | `GET /projects/{id}` | `200` + one project                             | `404` if missing |
+
+
 
 
 ### Add to `internal/handler/project.go`
@@ -710,6 +752,8 @@ func GetProjectHandler(mem *store.MemoryStore) http.HandlerFunc {
 | `ok == false` → 404        | Store signals missing; handler maps to HTTP                    |
 
 
+
+
 ### Register in `main.go`
 
 ```go
@@ -727,6 +771,8 @@ curl -i http://localhost:8080/projects/does-not-exist
 ```
 
 ---
+
+
 
 ## Step 7 — Task endpoints
 
@@ -746,6 +792,8 @@ Rules for create:
 2. Set `project_id` from path (never trust body for ownership)
 3. Default status to `"todo"` if empty
 4. If status provided, only allow `todo`, `doing`, `done`
+
+
 
 ### File: `internal/handler/task.go` (full file)
 
@@ -853,6 +901,8 @@ func GetTaskHandler(mem *store.MemoryStore) http.HandlerFunc {
 | Reuse `writeError` / `newID`     | Same package `handler` — shared helpers                           |
 
 
+
+
 ### Register in `main.go`
 
 ```go
@@ -873,6 +923,8 @@ curl -s http://localhost:8080/tasks/<TASK_ID>
 ```
 
 ---
+
+
 
 ## Step 8 — Recipe: adding any new endpoint
 
@@ -903,6 +955,8 @@ That is the same process professionals use. Later phases only swap **store → r
 
 ---
 
+
+
 ## Step 9 — Stretch (recommended before Phase 2)
 
 Use the recipe above. Store methods `UpdateProject`, `DeleteProject`, `UpdateTask`, `DeleteTask` are already in Step 4.
@@ -931,6 +985,8 @@ func withLogging(next http.HandlerFunc) http.HandlerFunc {
 ```
 
 ---
+
+
 
 ## Step 10 — Full curl smoke test
 
@@ -965,6 +1021,8 @@ go run -race ./cmd/api
 
 ---
 
+
+
 ## Step 11 — README for this phase
 
 Document in `README.md`:
@@ -977,6 +1035,8 @@ Document in `README.md`:
 6. One example curl for create + list
 
 ---
+
+
 
 ## Common mistakes
 
@@ -996,16 +1056,18 @@ Document in `README.md`:
 
 ---
 
+
+
 ## Exit checklist
 
-- [ ] You followed Steps 1–7 (stretch optional)  
-- [ ] `go run ./cmd/api` works  
-- [ ] Health, projects, and tasks match the contracts  
-- [ ] Errors return `{"error":"..."}` with correct status  
-- [ ] Mutex protects maps  
-- [ ] README documents how to run and test  
-- [ ] You can explain: **request → handler → store → response**  
-- [ ] You can add a new endpoint using Step 8 without being told which file  
+- [x] You followed Steps 1–7 (stretch optional)  
+- [x] `go run ./cmd/api` works  
+- [x] Health, projects, and tasks match the contracts  
+- [x] Errors return `{"error":"..."}` with correct status  
+- [x] Mutex protects maps  
+- [x] README documents how to run and test  
+- [x] You can explain: **request → handler → store → response**  
+- [x] You can add a new endpoint using Step 8 without being told which file  
 
 **Commit:** `feat(phase-1): in-memory projects and tasks API`
 
